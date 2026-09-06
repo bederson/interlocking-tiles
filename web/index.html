@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Interlocking Tile Design Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Interlocking Tile Design Console</h1>
+<p class="subtitle">Drag the sliders to preview the tile shape live. Export writes SVG + DXF files to disk for the XTool P3.</p>
+
+<div class="layout">
+  <div class="controls">
+
+    <fieldset>
+      <legend>Units</legend>
+      <label class="radio"><input type="radio" name="units" value="in" checked> inches</label>
+      <label class="radio"><input type="radio" name="units" value="mm"> millimeters</label>
+    </fieldset>
+
+    <div class="control">
+      <label for="size">Tile size <span class="value" id="sizeValue"></span></label>
+      <input type="range" id="size" list="sizeTicks">
+      <datalist id="sizeTicks"></datalist>
+    </div>
+
+    <div class="control">
+      <label for="amplitude">Bump / notch depth <span class="value" id="amplitudeValue"></span></label>
+      <input type="range" id="amplitude" list="amplitudeTicks">
+      <datalist id="amplitudeTicks"></datalist>
+    </div>
+
+    <fieldset>
+      <legend>Edge shape</legend>
+      <label class="radio"><input type="radio" name="edgeMode" value="simple" checked> simple</label>
+      <label class="radio"><input type="radio" name="edgeMode" value="random"> randomized</label>
+
+      <div class="control sub" id="wigglesControl">
+        <label for="wiggles">Wiggles <span class="value" id="wigglesValue"></span></label>
+        <input type="range" id="wiggles" min="1" max="5" step="1" value="1" list="wigglesTicks">
+        <datalist id="wigglesTicks">
+          <option value="1"></option><option value="2"></option><option value="3"></option>
+          <option value="4"></option><option value="5"></option>
+        </datalist>
+      </div>
+
+      <div class="control sub" id="edgeSeedControl" hidden>
+        <label for="edgeSeed">Edge seed</label>
+        <input type="number" id="edgeSeed" value="1" min="0" step="1">
+        <button type="button" id="edgeSeedRandomize" title="Randomize">🎲</button>
+      </div>
+    </fieldset>
+
+    <div class="control">
+      <label for="kerf">Kerf fine-tune <span class="value" id="kerfValue"></span></label>
+      <input type="range" id="kerf" list="kerfTicks">
+      <datalist id="kerfTicks"></datalist>
+    </div>
+
+    <div class="control">
+      <label for="engraveWidth">Engrave channel width <span class="value" id="engraveWidthValue"></span></label>
+      <input type="range" id="engraveWidth" list="engraveWidthTicks">
+      <datalist id="engraveWidthTicks"></datalist>
+    </div>
+
+    <div class="control">
+      <label for="count">Tiles to export <span class="value" id="countValue"></span></label>
+      <input type="range" id="count" min="1" max="36" step="1" value="9" list="countTicks">
+      <datalist id="countTicks">
+        <option value="1"></option><option value="9"></option><option value="18"></option>
+        <option value="27"></option><option value="36"></option>
+      </datalist>
+    </div>
+
+    <fieldset>
+      <legend>Material sheet to cut on</legend>
+      <div class="control">
+        <label for="sheetWidth">Width <span class="value" id="sheetWidthValue"></span></label>
+        <input type="number" id="sheetWidth" min="0.5">
+      </div>
+      <div class="control">
+        <label for="sheetHeight">Height <span class="value" id="sheetHeightValue"></span></label>
+        <input type="number" id="sheetHeight" min="0.5">
+      </div>
+      <p class="sheet-status" id="sheetStatus"></p>
+    </fieldset>
+
+    <div class="control">
+      <label for="faceSeed">Engrave pattern seed</label>
+      <input type="number" id="faceSeed" value="1" min="0" step="1">
+      <button type="button" id="faceSeedRandomize" title="Randomize">🎲</button>
+    </div>
+
+    <div class="control">
+      <button type="button" id="shuffleBtn">🔀 Shuffle preview arrangement</button>
+    </div>
+
+  </div>
+
+  <div class="preview">
+    <svg id="previewSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <p class="preview-caption" id="previewCaption"></p>
+  </div>
+</div>
+
+<div class="export-row">
+  <label for="outputDir">Output folder</label>
+  <input type="text" id="outputDir" placeholder="output/<timestamp> (auto)">
+  <button type="button" id="exportBtn">Export to disk (SVG + DXF)</button>
+  <span id="exportStatus"></span>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
