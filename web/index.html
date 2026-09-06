@@ -12,12 +12,6 @@
 <div class="layout">
   <div class="controls">
 
-    <fieldset>
-      <legend>Units</legend>
-      <label class="radio"><input type="radio" name="units" value="in" checked> inches</label>
-      <label class="radio"><input type="radio" name="units" value="mm"> millimeters</label>
-    </fieldset>
-
     <div class="control">
       <label for="size">Tile size <span class="value" id="sizeValue"></span></label>
       <input type="range" id="size" list="sizeTicks">
@@ -46,25 +40,40 @@
 
       <div class="control sub" id="edgeSeedControl" hidden>
         <label for="edgeSeed">Edge seed</label>
-        <input type="number" id="edgeSeed" value="1" min="0" step="1">
-        <button type="button" id="edgeSeedRandomize" title="Randomize">🎲</button>
+        <div class="row">
+          <input type="number" id="edgeSeed" value="1" min="0" step="1">
+          <button type="button" id="edgeSeedRandomize" title="Randomize">🎲</button>
+        </div>
       </div>
     </fieldset>
 
-    <div class="control">
+    <fieldset>
+      <legend>Engraving</legend>
+      <div class="control">
+        <label for="engraveLines">Lines (N) <span class="value" id="engraveLinesValue"></span></label>
+        <input type="range" id="engraveLines" min="1" max="10" step="1" value="3" list="engraveLinesTicks">
+        <datalist id="engraveLinesTicks">
+          <option value="1"></option><option value="2"></option><option value="3"></option>
+          <option value="4"></option><option value="5"></option><option value="6"></option>
+          <option value="7"></option><option value="8"></option><option value="9"></option>
+          <option value="10"></option>
+        </datalist>
+      </div>
+      <div class="control">
+        <label for="engraveWidth">Channel width <span class="value" id="engraveWidthValue"></span></label>
+        <input type="range" id="engraveWidth" list="engraveWidthTicks">
+        <datalist id="engraveWidthTicks"></datalist>
+      </div>
+    </fieldset>
+
+    <div class="control" hidden>
       <label for="kerf">Kerf fine-tune <span class="value" id="kerfValue"></span></label>
       <input type="range" id="kerf" list="kerfTicks">
       <datalist id="kerfTicks"></datalist>
     </div>
 
     <div class="control">
-      <label for="engraveWidth">Engrave channel width <span class="value" id="engraveWidthValue"></span></label>
-      <input type="range" id="engraveWidth" list="engraveWidthTicks">
-      <datalist id="engraveWidthTicks"></datalist>
-    </div>
-
-    <div class="control">
-      <label for="count">Tiles to export <span class="value" id="countValue"></span></label>
+      <label for="count"># Tiles <span class="value" id="countValue"></span></label>
       <input type="range" id="count" min="1" max="36" step="1" value="9" list="countTicks">
       <datalist id="countTicks">
         <option value="1"></option><option value="9"></option><option value="18"></option>
@@ -73,27 +82,37 @@
     </div>
 
     <fieldset>
-      <legend>Material sheet to cut on</legend>
+      <legend>Cutting layout</legend>
       <div class="control">
-        <label for="sheetWidth">Width <span class="value" id="sheetWidthValue"></span></label>
-        <input type="number" id="sheetWidth" min="0.5">
-      </div>
-      <div class="control">
-        <label for="sheetHeight">Height <span class="value" id="sheetHeightValue"></span></label>
-        <input type="number" id="sheetHeight" min="0.5">
+        <label for="columns">Columns <span class="value" id="columnsValue"></span></label>
+        <input type="range" id="columns" min="1" max="20" step="1" value="5" list="columnsTicks">
+        <datalist id="columnsTicks">
+          <option value="1"></option><option value="5"></option><option value="10"></option>
+          <option value="15"></option><option value="20"></option>
+        </datalist>
       </div>
       <p class="sheet-status" id="sheetStatus"></p>
     </fieldset>
 
     <div class="control">
       <label for="faceSeed">Engrave pattern seed</label>
-      <input type="number" id="faceSeed" value="1" min="0" step="1">
-      <button type="button" id="faceSeedRandomize" title="Randomize">🎲</button>
+      <div class="row">
+        <input type="number" id="faceSeed" value="1" min="0" step="1">
+        <button type="button" id="faceSeedRandomize" title="Randomize">🎲</button>
+      </div>
     </div>
 
     <div class="control">
       <button type="button" id="shuffleBtn">🔀 Shuffle preview arrangement</button>
     </div>
+
+    <fieldset>
+      <legend>Units</legend>
+      <div class="row">
+        <label class="radio"><input type="radio" name="units" value="in" checked> inches</label>
+        <label class="radio"><input type="radio" name="units" value="mm"> millimeters</label>
+      </div>
+    </fieldset>
 
   </div>
 

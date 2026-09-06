@@ -160,45 +160,145 @@ def max_wiggle_amplitude(harmonics):
 # Every motif's engrave lines meet an edge midpoint moving straight out,
 # perpendicular to that edge (true of the arcs and the straight pass-through
 # alike) -- so a single straight continuation line from each edge midpoint,
-# thickened the same as any other engrave ribbon, extends the pattern into
-# the frame piece correctly regardless of which motif the neighboring tile
-# actually has.
+# turned into parallel lines the same as any other engrave path, extends
+# the pattern into the frame piece correctly regardless of which motif the
+# neighboring tile actually has.
+#
+# Frame and corner pieces meet their NEIGHBORING frame/corner piece (not a
+# tile) along their short end caps -- those get a "keyhole"/dog-bone
+# tab-and-socket jigsaw connector instead of a plain straight edge, so the
+# whole border assembles into a connected loop. Every piece uses the same
+# fixed convention (see CONNECTOR_TAB/CONNECTOR_SOCKET below): one end is
+# always a tab, the other always the matching socket, so going around the
+# border in one consistent direction, each tab meets the next piece's
+# socket automatically.
 # ---------------------------------------------------------------------------
+
+CONNECTOR_TAB = "tab"
+CONNECTOR_SOCKET = "socket"
+# "Keyhole"/dog-bone connector: a neck narrower than the bulb it leads to, so
+# a mated tab/socket pair can't be pulled straight apart along the cap's own
+# axis -- only a plain semicircular bump could do that, since its widest
+# point is at the base. All three ratios are fractions of frame_width.
+CONNECTOR_NECK_RATIO = 0.15
+CONNECTOR_BULB_RADIUS_RATIO = 0.28
+CONNECTOR_STEM_RATIO = 0.35
+
+
+def connector_protrusion(frame_width):
+    """How far the tab's bulb tip extends past the piece's nominal edge."""
+    return frame_width * (CONNECTOR_STEM_RATIO + CONNECTOR_BULB_RADIUS_RATIO)
+
+
+def _keyhole_cap_points(p0, p1, bulge_direction, neck_half_width, bulb_radius, stem_length, n_samples=24):
+    """Replace the straight segment from p0 to p1 with a "keyhole"/dog-bone
+    shape: two short straight segments pinch in to a neck of half-width
+    `neck_half_width`, which opens out into a round bulb of `bulb_radius`
+    centered `stem_length` from the cap's midpoint along `bulge_direction`
+    (a unit vector perpendicular to p1-p0) -- a tab if bulge_direction points
+    away from the piece's material, or a matching socket if it points into
+    it. Since the bulb is wider than the neck, a mated pair mechanically
+    interlocks rather than just relying on friction. Returns the full
+    replacement point list, including p0 and p1.
+    """
+    mid = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+    cap_dir = _normalize((p1[0] - p0[0], p1[1] - p0[1]))
+    h = math.sqrt(bulb_radius ** 2 - neck_half_width ** 2)
+
+    def local_to_global(u, v):
+        return (
+            mid[0] + cap_dir[0] * u + bulge_direction[0] * v,
+            mid[1] + cap_dir[1] * u + bulge_direction[1] * v,
+        )
+
+    center = local_to_global(0.0, stem_length)
+    b_minus = local_to_global(-neck_half_width, 0.0)
+    b_plus = local_to_global(neck_half_width, 0.0)
+    p_minus = local_to_global(-neck_half_width, stem_length - h)
+    p_plus = local_to_global(neck_half_width, stem_length - h)
+
+    def angle_from_center(point):
+        vx, vy = point[0] - center[0], point[1] - center[1]
+        u = vx * cap_dir[0] + vy * cap_dir[1]
+        v = vx * bulge_direction[0] + vy * bulge_direction[1]
+        return math.atan2(v, u)
+
+    phi_minus = angle_from_center(p_minus)
+    phi_plus = angle_from_center(p_plus)
+    # The short way around from phi_minus to phi_plus passes through the
+    # neck opening (v<0 side); the tip of the bulb is the long way around,
+    # through local angle +90 deg -- verified numerically to hold regardless
+    # of the actual global cap_dir/bulge_direction, since both are expressed
+    # consistently in that same local frame.
+    sweep = ((phi_plus - phi_minus) % (2 * math.pi)) - 2 * math.pi
+
+    arc = []
+    for i in range(n_samples + 1):
+        phi = phi_minus + sweep * i / n_samples
+        arc.append((
+            center[0] + bulb_radius * (math.cos(phi) * cap_dir[0] + math.sin(phi) * bulge_direction[0]),
+            center[1] + bulb_radius * (math.cos(phi) * cap_dir[1] + math.sin(phi) * bulge_direction[1]),
+        ))
+    return [p0, b_minus] + arc + [b_plus, p1]
+
+
+def _connector_cap(p0, p1, outward_direction, kind, frame_width):
+    """A tab's bulb bulges outward (away from the piece); a socket's bulb
+    bulges inward (the same absolute direction as the tab it must receive)
+    -- see the module comment above. `outward_direction` is the unit vector
+    pointing away from the piece's material at this end."""
+    neck_half_width = frame_width * CONNECTOR_NECK_RATIO
+    bulb_radius = frame_width * CONNECTOR_BULB_RADIUS_RATIO
+    stem_length = frame_width * CONNECTOR_STEM_RATIO
+    bulge = outward_direction if kind == CONNECTOR_TAB else (-outward_direction[0], -outward_direction[1])
+    return _keyhole_cap_points(p0, p1, bulge, neck_half_width, bulb_radius, stem_length)
+
 
 def frame_piece_outline(size, frame_width, harmonics, n_samples):
     """One frame piece: wiggly tile-matching edge on one long side, flat
-    outer edge on the other, straight short end caps. Built against a
-    canonical bottom tile edge; other orientations are this same piece
-    rotated 90/180/270 degrees by hand during assembly, same as tiles."""
+    outer edge on the other, tab-and-socket connectors on the two short
+    ends (a tab at x=size, a socket at x=0) so pieces connect end to end.
+    Built against a canonical bottom tile edge; other orientations are this
+    same piece rotated 90/180/270 degrees by hand during assembly, same as
+    tiles."""
     inner = edge_points((0.0, 0.0), (size, 0.0), harmonics, n_samples)
-    return inner + [(size, -frame_width), (0.0, -frame_width)]
+    tab = _connector_cap((size, 0.0), (size, -frame_width), (1.0, 0.0), CONNECTOR_TAB, frame_width)
+    socket = _connector_cap((0.0, -frame_width), (0.0, 0.0), (-1.0, 0.0), CONNECTOR_SOCKET, frame_width)
+    return inner[:-1] + tab + [(0.0, -frame_width)] + socket[1:]
 
 
-def frame_piece_engrave_ribbons(size, frame_width, harmonics, engrave_width):
+def frame_piece_engrave_lines(size, frame_width, harmonics, engrave_width, engrave_lines_n):
     mid = size / 2.0
     overshoot = max_wiggle_amplitude(harmonics)
     line = extend_polyline_ends([(mid, 0.0), (mid, -frame_width)], overshoot)
-    return [thicken_polyline(line, engrave_width)]
+    return parallel_lines(line, engrave_width, engrave_lines_n)
 
 
 def corner_piece_outline(size, frame_width, harmonics, n_samples):
     """One corner piece: wiggly tile-matching edges on the two sides that
     touch the corner tile (its bottom and left edges, canonically), flat
-    edges completing the frame's outer corner, straight end caps. Built
-    against a canonical bottom-left tile corner; the other 3 corners are
-    this same piece rotated 90/180/270 degrees during assembly."""
+    edges completing the frame's outer corner, and the same tab-and-socket
+    connectors as a frame piece on its two far ends (a tab at x=size,
+    matching a frame piece's socket end; a socket at y=size, matching a
+    frame piece's tab end coming from the other direction). Built against
+    a canonical bottom-left tile corner; the other 3 corners are this same
+    piece rotated 90/180/270 degrees during assembly."""
     bottom = list(reversed(edge_points((0.0, 0.0), (size, 0.0), harmonics, n_samples)))
     left = list(reversed(edge_points((0.0, size), (0.0, 0.0), harmonics, n_samples)))
     inner = bottom + left[1:]  # (size,0) -> ... -> (0,0) -> ... -> (0,size), skipping the shared (0,0)
-    return inner + [(-frame_width, size), (-frame_width, -frame_width), (size, -frame_width)]
+    tab = _connector_cap((size, -frame_width), (size, 0.0), (1.0, 0.0), CONNECTOR_TAB, frame_width)
+    socket = _connector_cap((0.0, size), (-frame_width, size), (0.0, 1.0), CONNECTOR_SOCKET, frame_width)
+    return inner[:-1] + socket + [(-frame_width, -frame_width), (size, -frame_width)] + tab[1:]
 
 
-def corner_piece_engrave_ribbons(size, frame_width, harmonics, engrave_width):
+def corner_piece_engrave_lines(size, frame_width, harmonics, engrave_width, engrave_lines_n):
     mid = size / 2.0
     overshoot = max_wiggle_amplitude(harmonics)
     bottom_line = extend_polyline_ends([(mid, 0.0), (mid, -frame_width)], overshoot)
     left_line = extend_polyline_ends([(0.0, mid), (-frame_width, mid)], overshoot)
-    return [thicken_polyline(bottom_line, engrave_width), thicken_polyline(left_line, engrave_width)]
+    return parallel_lines(bottom_line, engrave_width, engrave_lines_n) + parallel_lines(
+        left_line, engrave_width, engrave_lines_n
+    )
 
 
 def frame_and_corner_counts(grid_cols, grid_rows):
@@ -237,20 +337,12 @@ def offset_polygon(points, delta):
     return result
 
 
-def thicken_polyline(points, width):
-    """Turn a centerline polyline into a closed ribbon polygon `width` wide.
-
-    Laser software engraves based on geometry, not a cosmetic stroke-width
-    number, so a genuinely wide engraved channel needs an actual filled
-    band shape -- not just a thicker-looking line. Offsets each point by
-    half the width along the local normal (averaging the two adjacent
-    segment normals at interior points; using the single adjacent segment's
-    normal, i.e. a butt cap, at the two open ends), then stitches the two
-    offset sides into one closed loop.
-    """
-    half = width / 2.0
+def _open_polyline_normals(points):
+    """Per-vertex outward normal for an OPEN polyline: the average of the
+    two adjacent segment normals at interior points, or the single
+    adjacent segment's normal (a butt end) at the two open ends."""
+    normals = []
     n = len(points)
-    left, right = [], []
     for i in range(n):
         segment_normals = []
         if i > 0:
@@ -260,10 +352,24 @@ def thicken_polyline(points, width):
             d = (points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1])
             segment_normals.append(_normalize((d[1], -d[0])))
         avg = tuple(sum(v) for v in zip(*segment_normals))
-        normal = _normalize(avg)
-        left.append((points[i][0] + normal[0] * half, points[i][1] + normal[1] * half))
-        right.append((points[i][0] - normal[0] * half, points[i][1] - normal[1] * half))
-    return left + list(reversed(right))
+        normals.append(_normalize(avg))
+    return normals
+
+
+def parallel_lines(points, width, n):
+    """Return `n` open polylines, evenly spaced across `width` and offset
+    from the centerline perpendicular to it at each point -- N distinct
+    engraved strokes spanning the same width a single filled channel would,
+    rather than one solid band. n=1 places a single line along the
+    centerline itself (no spacing to speak of with only one line).
+    """
+    normals = _open_polyline_normals(points)
+    if n <= 1:
+        offsets = [0.0]
+    else:
+        step = width / (n - 1)
+        offsets = [-width / 2.0 + i * step for i in range(n)]
+    return [[(p[0] + nrm[0] * off, p[1] + nrm[1] * off) for p, nrm in zip(points, normals)] for off in offsets]
 
 
 def default_engrave_width(units):
@@ -292,28 +398,30 @@ def svg_groups(cut_path_ds, engrave_path_ds, stroke_width):
     """Wrap the cut and engrave paths in separate named <g> groups.
 
     Vector/laser software (XCS included) treats each top-level group as a
-    distinct selectable object, so this lets the whole cut outline (or the
-    whole engrave fill) be selected and assigned an operation in one click,
+    distinct selectable object, so this lets the whole cut outline (or all
+    the engrave lines) be selected and assigned an operation in one click,
     rather than every individual path needing to be picked out by hand.
-    `engrave_path_ds` are closed filled bands (see thicken_polyline), not
-    thin centerlines -- they render (and laser-engrave, if assigned to a
-    Fill operation) as solid `width`-wide channels.
+    `engrave_path_ds` are open polylines (parallel_lines) -- distinct
+    stroked lines, not a filled band.
     """
-    cut_lines = "\n".join(
+    cut_html = "\n".join(
         f'    <path d="{d}" fill="none" stroke="{CUT_COLOR}" stroke-width="{stroke_width}"/>' for d in cut_path_ds
     )
-    engrave_lines = "\n".join(f'    <path d="{d}" fill="{ENGRAVE_COLOR}" stroke="none"/>' for d in engrave_path_ds)
-    return f'  <g id="CUT">\n{cut_lines}\n  </g>\n  <g id="ENGRAVE">\n{engrave_lines}\n  </g>'
+    engrave_html = "\n".join(
+        f'    <path d="{d}" fill="none" stroke="{ENGRAVE_COLOR}" stroke-width="{stroke_width}"/>'
+        for d in engrave_path_ds
+    )
+    return f'  <g id="CUT">\n{cut_html}\n  </g>\n  <g id="ENGRAVE">\n{engrave_html}\n  </g>'
 
 
-def write_piece_svg(path, min_x, min_y, width, height, units, cut_points, engrave_ribbons):
+def write_piece_svg(path, min_x, min_y, width, height, units, cut_points, engrave_lines):
     """Write one piece's SVG with an explicit (min_x, min_y, width, height)
     viewBox -- the *nominal* bounding box for this piece type, not one
     computed from the actual (possibly slightly overshooting) geometry, so
     the declared physical size stays exact for XCS's scale verification."""
     stroke_width = max(width, height) * 0.002
     cut_path_ds = [points_to_svg_path(cut_points, closed=True)]
-    engrave_path_ds = [points_to_svg_path(ribbon, closed=True) for ribbon in engrave_ribbons]
+    engrave_path_ds = [points_to_svg_path(line, closed=False) for line in engrave_lines]
     svg = (
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}{units}" height="{height}{units}" '
@@ -324,8 +432,8 @@ def write_piece_svg(path, min_x, min_y, width, height, units, cut_points, engrav
     path.write_text(svg)
 
 
-def write_tile_svg(path, size, units, cut_points, engrave_ribbons):
-    write_piece_svg(path, 0, 0, size, size, units, cut_points, engrave_ribbons)
+def write_tile_svg(path, size, units, cut_points, engrave_lines):
+    write_piece_svg(path, 0, 0, size, size, units, cut_points, engrave_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -364,13 +472,12 @@ def _dxf_document(entity_lines, units):
     return "\n".join(header + tables + entities + footer) + "\n"
 
 
-def write_tile_dxf(path, units, cut_points, engrave_ribbons):
-    """`engrave_ribbons` are closed bands; writing them as closed polylines
-    lets XCS assign an Engrave-Fill (raster infill) operation to the layer,
-    which is what actually produces a wide engraved channel."""
+def write_tile_dxf(path, units, cut_points, engrave_lines):
+    """`engrave_lines` are open polylines (parallel_lines) -- N distinct
+    stroked lines on the ENGRAVE layer, for a Score/Line operation."""
     entities = _dxf_polyline_lines(cut_points, "CUT", 1, closed=True)
-    for ribbon in engrave_ribbons:
-        entities += _dxf_polyline_lines(ribbon, "ENGRAVE", 5, closed=True)
+    for line in engrave_lines:
+        entities += _dxf_polyline_lines(line, "ENGRAVE", 5, closed=False)
     path.write_text(_dxf_document(entities, units))
 
 
@@ -389,16 +496,20 @@ def _pdf_points_per_unit(units):
     return 72.0 / 25.4 if units == "mm" else 72.0
 
 
-def _pdf_path_ops(points, scale):
+def _pdf_path_ops(points, scale, closed=True):
     if not points:
         return ""
     ops = [f"{points[0][0] * scale:.3f} {points[0][1] * scale:.3f} m"]
     ops += [f"{x * scale:.3f} {y * scale:.3f} l" for x, y in points[1:]]
-    ops.append("h")
+    if closed:
+        ops.append("h")
     return " ".join(ops)
 
 
 def pdf_document(sheet_w, sheet_h, units, cut_polys, engrave_polys):
+    """`engrave_polys` are open polylines (parallel_lines) -- N distinct
+    stroked lines, drawn the same way as the cut outline (open here too,
+    since cut outlines are also stroked, just closed back to their start)."""
     scale = _pdf_points_per_unit(units)
     width_pt, height_pt = sheet_w * scale, sheet_h * scale
 
@@ -408,14 +519,15 @@ def pdf_document(sheet_w, sheet_h, units, cut_polys, engrave_polys):
         lines.append(f"{r:.3f} {g:.3f} {b:.3f} RG")
         lines.append("0.5 w")
         for pts in cut_polys:
-            lines.append(_pdf_path_ops(pts, scale))
+            lines.append(_pdf_path_ops(pts, scale, closed=True))
             lines.append("S")
     if engrave_polys:
         r, g, b = tuple(int(ENGRAVE_COLOR[i : i + 2], 16) / 255 for i in (1, 3, 5))
-        lines.append(f"{r:.3f} {g:.3f} {b:.3f} rg")
+        lines.append(f"{r:.3f} {g:.3f} {b:.3f} RG")
+        lines.append("0.5 w")
         for pts in engrave_polys:
-            lines.append(_pdf_path_ops(pts, scale))
-            lines.append("f")
+            lines.append(_pdf_path_ops(pts, scale, closed=False))
+            lines.append("S")
     content_bytes = "\n".join(lines).encode("latin-1")
 
     objects = [
@@ -449,109 +561,47 @@ def write_sheet_pdf(path, sheet_w, sheet_h, units, cut_polys, engrave_polys):
 
 
 # ---------------------------------------------------------------------------
-# Sheet layout (batch of tiles on one P3-bed-sized page, SVG + DXF)
+# Sheet layout: flow every piece (tiles, frame pieces, corner pieces alike)
+# N=`columns` per row, top to bottom, and compute however much material
+# that needs -- rather than fitting a fixed target sheet size. One combined
+# sheet, since there's no fixed height to overflow.
 # ---------------------------------------------------------------------------
 
-def sheet_grid_dims(size, sheet_w, sheet_h, margin):
-    """How many tile columns/rows fit on one sheet.
+def default_columns(item_count):
+    """A roughly-square default: about as many columns as rows."""
+    return max(1, math.ceil(math.sqrt(item_count)))
 
-    Raises ValueError if a single tile (plus its margin) doesn't fit at all.
+
+def flow_layout(items, columns, margin):
+    """Lay out `items` (dicts with 'width'/'height'/'min_x'/'min_y'/
+    'cut_points'/'engrave_lines') `columns` per row, flowing top to bottom
+    regardless of each item's own size, and compute the material size that
+    requires.
+
+    Returns (placements, sheet_w, sheet_h): placements is a list of dicts
+    with 'cut_points'/'engrave_lines' already shifted to absolute
+    coordinates; sheet_w/sheet_h are the required material dimensions.
     """
-    if size + margin > sheet_w or size + margin > sheet_h:
-        raise ValueError(
-            f"A {size:g} tile (plus {margin:g} margin) does not fit on a "
-            f"{sheet_w:g} x {sheet_h:g} sheet."
-        )
-    cols = max(1, int((sheet_w + margin) // (size + margin)))
-    rows = max(1, int((sheet_h + margin) // (size + margin)))
-    return cols, rows
-
-
-def pack_into_region(items, region_x, region_y, region_w, region_h, margin):
-    """Shelf-pack items (dicts with 'width'/'height') into a bounded
-    rectangle on the sheet, left-to-right then top-to-bottom. Not
-    space-optimal, but robust for the modest number of pieces a frame
-    needs. Returns (placements, leftover) -- placements is a list of
-    (item, x, y) giving where that item's own (min_x, min_y) bounding-box
-    corner lands; leftover is the items (in order) that didn't fit.
-    """
-    placements = []
-    cursor_x, shelf_y, shelf_height, shelf_has_item = region_x + margin, region_y + margin, 0.0, False
-    idx = 0
-    for item in items:
-        w, h = item["width"], item["height"]
-        if w + 2 * margin > region_w:
-            break  # doesn't fit in this region on any shelf, regardless of state
-        if shelf_has_item and cursor_x + w > region_x + region_w - margin:
-            cursor_x, shelf_y, shelf_height, shelf_has_item = region_x + margin, shelf_y + shelf_height + margin, 0.0, False
-        if shelf_y + h > region_y + region_h - margin:
-            break
-        placements.append((item, cursor_x, shelf_y))
-        cursor_x += w + margin
-        shelf_height = max(shelf_height, h)
-        shelf_has_item = True
-        idx += 1
-    return placements, items[idx:]
-
-
-def validate_piece_fits(width, height, sheet_w, sheet_h, margin, label):
-    if width + 2 * margin > sheet_w or height + 2 * margin > sheet_h:
-        raise ValueError(f"A {label} ({width:g} x {height:g}) does not fit on a {sheet_w:g} x {sheet_h:g} sheet.")
-
-
-def compute_combined_layout(tiles, frame_items, corner_items, size, sheet_w, sheet_h, margin):
-    """Lay out tiles in their grid, then nest frame/corner pieces into the
-    leftover sheet space beside and below that grid -- rather than a wholly
-    separate sheet -- for more efficient material usage. Falls back to
-    dedicated sheets for any pieces that don't fit alongside tiles.
-
-    Returns a list of sheets; each sheet is a list of placement dicts:
-    {'cut_points': [...], 'engrave_ribbons': [[...], ...]}, already in
-    absolute sheet coordinates.
-    """
-    cols, rows = sheet_grid_dims(size, sheet_w, sheet_h, margin)
-    per_sheet = cols * rows
-    # Tallest first packs a little more efficiently into the leftover strips.
-    pending = sorted(list(frame_items) + list(corner_items), key=lambda it: -it["height"])
-
     def place(item, shift_x, shift_y):
         return {
             "cut_points": [(x + shift_x, y + shift_y) for x, y in item["cut_points"]],
-            "engrave_ribbons": [[(x + shift_x, y + shift_y) for x, y in r] for r in item["engrave_ribbons"]],
+            "engrave_lines": [[(x + shift_x, y + shift_y) for x, y in r] for r in item["engrave_lines"]],
         }
 
-    sheets = []
-    tile_idx = 0
-    while tile_idx < len(tiles) or pending:
-        chunk = tiles[tile_idx : tile_idx + per_sheet]
-        tile_idx += len(chunk)
-        placements = []
+    placements = []
+    cursor_y = margin
+    sheet_w = margin
+    for row_start in range(0, len(items), columns):
+        row = items[row_start : row_start + columns]
+        cursor_x = margin
+        row_height = max((it["height"] for it in row), default=0.0)
+        for item in row:
+            placements.append(place(item, cursor_x - item["min_x"], cursor_y - item["min_y"]))
+            cursor_x += item["width"] + margin
+        sheet_w = max(sheet_w, cursor_x)
+        cursor_y += row_height + margin
 
-        for i, tile in enumerate(chunk):
-            col, row = i % cols, i // cols
-            ox, oy = margin + col * (size + margin), margin + row * (size + margin)
-            placements.append(place(tile, ox, oy))
-
-        if chunk:
-            # cols_used is the sheet's full column capacity only if at least
-            # one row is completely full; otherwise it's just this single
-            # (partial) row's tile count -- reclaiming the rest of the width
-            # for frame/corner nesting instead of reserving the sheet's full
-            # capacity for however many tiles actually got cut.
-            cols_used = cols if len(chunk) > cols else len(chunk)
-            block_right = cols_used * (size + margin)
-            block_bottom = math.ceil(len(chunk) / cols) * (size + margin)
-        else:
-            block_right = block_bottom = 0.0
-
-        right_placed, pending = pack_into_region(pending, block_right, 0.0, sheet_w - block_right, sheet_h, margin)
-        bottom_placed, pending = pack_into_region(pending, 0.0, block_bottom, block_right, sheet_h - block_bottom, margin)
-        for item, px, py in right_placed + bottom_placed:
-            placements.append(place(item, px - item["min_x"], py - item["min_y"]))
-
-        if not placements and pending:
-            raise ValueError("A frame or corner piece does not fit on the given sheet size.")
-        sheets.append(placements)
+    return placements, sheet_w, cursor_y
 
     return sheets
 
@@ -566,12 +616,12 @@ def write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, s
     cut_polys, engrave_polys = [], []
     for p in placements:
         cut_path_ds.append(points_to_svg_path(p["cut_points"], closed=True))
-        engrave_path_ds.extend(points_to_svg_path(r, closed=True) for r in p["engrave_ribbons"])
+        engrave_path_ds.extend(points_to_svg_path(r, closed=False) for r in p["engrave_lines"])
         dxf_entities += _dxf_polyline_lines(p["cut_points"], "CUT", 1, closed=True)
-        for r in p["engrave_ribbons"]:
-            dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=True)
+        for r in p["engrave_lines"]:
+            dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=False)
         cut_polys.append(p["cut_points"])
-        engrave_polys.extend(p["engrave_ribbons"])
+        engrave_polys.extend(p["engrave_lines"])
 
     svg_path = output_dir / f"sheet_{sheet_number:04d}.svg"
     svg_path.write_text(
@@ -640,11 +690,8 @@ def self_check(size, harmonics, n_samples):
 # web design console's server, so both always produce identical geometry.
 # ---------------------------------------------------------------------------
 
-def default_sheet_dims(units):
-    # P3 bed is 36in x 18in; margin is a small gap between tiles.
-    if units == "mm":
-        return 900.0, 450.0, 6.0
-    return 36.0, 18.0, 0.25
+def default_margin(units):
+    return 6.0 if units == "mm" else 0.25
 
 
 def default_output_dir():
@@ -661,6 +708,17 @@ def infer_grid_dims(count):
     return cols, rows
 
 
+# The subset of generate_batch()'s summary dict that transport adapters
+# (server.py's HTTP handler, the native macOS app's subprocess bridge) send
+# back to the browser/WKWebView -- kept as one shared list so every
+# transport reports the same shape without duplicating it per adapter.
+EXPORT_RESPONSE_FIELDS = [
+    "tile_count", "sheet_files", "output_dir", "harmonics",
+    "grid_cols", "grid_rows", "frame_count", "corner_count",
+    "columns", "sheet_width", "sheet_height",
+]
+
+
 def generate_batch(params):
     """Generate a full tile batch (per-tile + sheet SVG/DXF files) on disk.
 
@@ -672,13 +730,8 @@ def generate_batch(params):
     samples = int(params.get("samples_per_edge", 120))
     count = int(params.get("count", 9))
 
-    default_w, default_h, default_margin = default_sheet_dims(units)
-    sheet_w = params.get("sheet_width") or default_w
-    sheet_h = params.get("sheet_height") or default_h
     margin = params.get("sheet_margin")
-    margin = default_margin if margin is None else margin
-
-    sheet_grid_dims(size, sheet_w, sheet_h, margin)  # raises if it won't fit, before any files are written
+    margin = default_margin(units) if margin is None else margin
 
     harmonics = build_edge_harmonics(
         float(params.get("amplitude", 0.25)),
@@ -690,27 +743,34 @@ def generate_batch(params):
 
     output_dir = Path(params.get("output_dir") or default_output_dir())
     output_dir.mkdir(parents=True, exist_ok=True)
+    pieces_dir = output_dir / "pieces"
+    pieces_dir.mkdir(parents=True, exist_ok=True)
 
     cut_outline = tile_cut_outline(size, harmonics, samples)
     cut_outline = offset_polygon(cut_outline, float(params.get("kerf_adjust", 0.0)))
 
     engrave_width = params.get("engrave_width") or default_engrave_width(units)
+    engrave_lines_n = int(params.get("engrave_lines") or 3)
     overshoot = max_wiggle_amplitude(harmonics)  # guaranteed >= the true boundary's max excursion anywhere
 
     face_rng = random.Random(params.get("face_seed"))
     tiles, tile_files = [], []
     for i in range(count):
         motif = face_rng.choice(MOTIFS)
-        engrave_ribbons = [
-            thicken_polyline(extend_polyline_ends(arc, overshoot), engrave_width)
+        engrave_lines = [
+            line
             for arc in truchet_face_paths(size, motif)
+            for line in parallel_lines(extend_polyline_ends(arc, overshoot), engrave_width, engrave_lines_n)
         ]
-        tiles.append({"cut_points": cut_outline, "engrave_ribbons": engrave_ribbons, "motif": motif})
+        tiles.append({
+            "cut_points": cut_outline, "engrave_lines": engrave_lines, "motif": motif,
+            "width": size, "height": size, "min_x": 0.0, "min_y": 0.0,
+        })
 
-        svg_path = output_dir / f"tile_{i + 1:04d}.svg"
-        dxf_path = output_dir / f"tile_{i + 1:04d}.dxf"
-        write_tile_svg(svg_path, size, units, cut_outline, engrave_ribbons)
-        write_tile_dxf(dxf_path, units, cut_outline, engrave_ribbons)
+        svg_path = pieces_dir / f"tile_{i + 1:04d}.svg"
+        dxf_path = pieces_dir / f"tile_{i + 1:04d}.dxf"
+        write_tile_svg(svg_path, size, units, cut_outline, engrave_lines)
+        write_tile_dxf(dxf_path, units, cut_outline, engrave_lines)
         tile_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
 
     # Frame and corner pieces border the grid the tiles will be assembled
@@ -720,68 +780,74 @@ def generate_batch(params):
     default_cols, default_rows = infer_grid_dims(count)
     grid_cols = int(params.get("grid_cols") or default_cols)
     grid_rows = int(params.get("grid_rows") or default_rows)
-    frame_width = float(params.get("frame_width") or size / 3.0)
+    frame_width = float(params.get("frame_width") or size / 2.0)
     kerf_adjust = float(params.get("kerf_adjust", 0.0))
-
-    validate_piece_fits(size, frame_width, sheet_w, sheet_h, margin, "frame piece")
-    validate_piece_fits(size + frame_width, size + frame_width, sheet_w, sheet_h, margin, "corner piece")
 
     frame_count, corner_count = frame_and_corner_counts(grid_cols, grid_rows)
 
     frame_outline = offset_polygon(frame_piece_outline(size, frame_width, harmonics, samples), kerf_adjust)
-    frame_ribbons = frame_piece_engrave_ribbons(size, frame_width, harmonics, engrave_width)
+    frame_lines = frame_piece_engrave_lines(size, frame_width, harmonics, engrave_width, engrave_lines_n)
     corner_outline = offset_polygon(corner_piece_outline(size, frame_width, harmonics, samples), kerf_adjust)
-    corner_ribbons = corner_piece_engrave_ribbons(size, frame_width, harmonics, engrave_width)
+    corner_lines = corner_piece_engrave_lines(size, frame_width, harmonics, engrave_width, engrave_lines_n)
+
+    # The tab connector protrudes connector_protrusion() past x=size; pad
+    # just the per-piece SVG's viewBox (not its declared width/height used
+    # for XCS scale verification -- see write_piece_svg) so the standalone
+    # inspection file shows the whole piece instead of clipping the tab.
+    # The DXF and the combined sheet aren't viewBox-limited, so this is
+    # purely cosmetic for the individual preview file.
+    r = connector_protrusion(frame_width)
 
     frame_files, corner_files = [], []
     for i in range(frame_count):
-        svg_path = output_dir / f"frame_{i + 1:04d}.svg"
-        dxf_path = output_dir / f"frame_{i + 1:04d}.dxf"
-        write_piece_svg(svg_path, 0, -frame_width, size, frame_width, units, frame_outline, frame_ribbons)
-        write_tile_dxf(dxf_path, units, frame_outline, frame_ribbons)
+        svg_path = pieces_dir / f"frame_{i + 1:04d}.svg"
+        dxf_path = pieces_dir / f"frame_{i + 1:04d}.dxf"
+        write_piece_svg(svg_path, 0, -frame_width, size + r, frame_width, units, frame_outline, frame_lines)
+        write_tile_dxf(dxf_path, units, frame_outline, frame_lines)
         frame_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
     for i in range(corner_count):
-        svg_path = output_dir / f"corner_{i + 1:04d}.svg"
-        dxf_path = output_dir / f"corner_{i + 1:04d}.dxf"
+        svg_path = pieces_dir / f"corner_{i + 1:04d}.svg"
+        dxf_path = pieces_dir / f"corner_{i + 1:04d}.dxf"
         write_piece_svg(
-            svg_path, -frame_width, -frame_width, size + frame_width, size + frame_width,
-            units, corner_outline, corner_ribbons,
+            svg_path, -frame_width, -frame_width, size + frame_width + r, size + frame_width,
+            units, corner_outline, corner_lines,
         )
-        write_tile_dxf(dxf_path, units, corner_outline, corner_ribbons)
+        write_tile_dxf(dxf_path, units, corner_outline, corner_lines)
         corner_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
 
     frame_items = [
         {
-            "cut_points": frame_outline, "engrave_ribbons": frame_ribbons,
-            "width": size, "height": frame_width, "min_x": 0.0, "min_y": -frame_width,
+            "cut_points": frame_outline, "engrave_lines": frame_lines,
+            # width includes the tab's protrusion past x=size, so the flow
+            # layout reserves enough room and doesn't overlap the next item.
+            "width": size + r, "height": frame_width, "min_x": 0.0, "min_y": -frame_width,
         }
         for _ in range(frame_count)
     ]
     corner_items = [
         {
-            "cut_points": corner_outline, "engrave_ribbons": corner_ribbons,
-            "width": size + frame_width, "height": size + frame_width,
+            "cut_points": corner_outline, "engrave_lines": corner_lines,
+            "width": size + frame_width + r, "height": size + frame_width,
             "min_x": -frame_width, "min_y": -frame_width,
         }
         for _ in range(corner_count)
     ]
 
-    # Tiles, frame pieces, and corner pieces are laid out together on each
-    # sheet (frame/corner nested into the leftover space beside and below
-    # the tile grid) and each sheet is written once as SVG + DXF + PDF, all
-    # three combining every piece type instead of splitting tiles from
-    # frame/corner into separate files.
-    combined_sheets = compute_combined_layout(tiles, frame_items, corner_items, size, sheet_w, sheet_h, margin)
-    sheet_files = []
-    for sheet_number, placements in enumerate(combined_sheets, start=1):
-        svg_path, dxf_path, pdf_path = write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, sheet_h)
-        sheet_files.append({"svg": str(svg_path), "dxf": str(dxf_path), "pdf": str(pdf_path)})
+    # Tiles, frame pieces, and corner pieces all flow together, `columns`
+    # per row, into one combined sheet -- the material size needed is
+    # computed from that layout, rather than fitting a given target size.
+    all_items = tiles + frame_items + corner_items
+    columns = int(params.get("columns") or default_columns(len(all_items)))
+    placements, sheet_w, sheet_h = flow_layout(all_items, columns, margin)
+    svg_path, dxf_path, pdf_path = write_combined_sheet(output_dir, 1, placements, units, sheet_w, sheet_h)
+    sheet_files = [{"svg": str(svg_path), "dxf": str(dxf_path), "pdf": str(pdf_path)}]
 
     return {
         "harmonics": harmonics,
         "tile_count": count,
         "tile_files": tile_files,
         "sheet_files": sheet_files,
+        "columns": columns,
         "grid_cols": grid_cols,
         "grid_rows": grid_rows,
         "frame_width": frame_width,
@@ -810,14 +876,14 @@ def main():
     parser.add_argument("--face-seed", type=int, default=None, help="seed for per-tile engrave motif choice")
     parser.add_argument("--kerf-adjust", type=float, default=0.0, help="signed fine-tune offset (+ tighter, - looser)")
     parser.add_argument("--engrave-width", type=float, default=None, help="engrave channel width; default 0.5in / 12.7mm")
+    parser.add_argument("--engrave-lines", type=int, default=None, help="number of parallel engrave lines spanning the channel width; default 3")
     parser.add_argument("--units", choices=["in", "mm"], default="in")
     parser.add_argument("--samples-per-edge", type=int, default=120)
-    parser.add_argument("--sheet-width", type=float, default=None, help="material width to lay tiles out on; default: P3 bed width (36in / 900mm)")
-    parser.add_argument("--sheet-height", type=float, default=None, help="material height to lay tiles out on; default: P3 bed height (18in / 450mm)")
-    parser.add_argument("--sheet-margin", type=float, default=None, help="default: 0.25in / 6mm")
+    parser.add_argument("--columns", type=int, default=None, help="pieces (tiles+frame+corner) per row when flowing the cutting layout; default: roughly square")
+    parser.add_argument("--sheet-margin", type=float, default=None, help="gap between pieces; default: 0.25in / 6mm")
     parser.add_argument("--grid-cols", type=int, default=None, help="tile grid width for frame/corner pieces; default: inferred square-ish from --count")
     parser.add_argument("--grid-rows", type=int, default=None, help="tile grid height for frame/corner pieces; default: inferred square-ish from --count")
-    parser.add_argument("--frame-width", type=float, default=None, help="frame/corner piece depth; default: size/3")
+    parser.add_argument("--frame-width", type=float, default=None, help="frame/corner piece depth; default: size/2")
     parser.add_argument("--output-dir", type=str, default=None, help="default: output/<timestamp>, a fresh folder per run")
     args = parser.parse_args()
 
@@ -828,10 +894,10 @@ def main():
 
     print(f"Wrote {len(summary['tile_files'])} tile SVG+DXF pairs, "
           f"{summary['frame_count']} frame + {summary['corner_count']} corner piece SVG+DXF pairs, and "
-          f"{len(summary['sheet_files'])} combined sheet SVG+DXF+PDF set(s) to {summary['output_dir']}/")
-    print(f"Grid: {summary['grid_cols']}x{summary['grid_rows']}, frame width {summary['frame_width']:g} {args.units} "
-          "(frame/corner pieces nested alongside tiles on the same sheet where they fit)")
-    print(f"Sheet size: {summary['sheet_width']:g} x {summary['sheet_height']:g} {args.units}")
+          f"{len(summary['sheet_files'])} combined sheet SVG+DXF+PDF set to {summary['output_dir']}/")
+    print(f"Assembly grid: {summary['grid_cols']}x{summary['grid_rows']}, frame width {summary['frame_width']:g} {args.units}")
+    print(f"Cutting layout: {summary['columns']} columns -> required material "
+          f"{summary['sheet_width']:g} x {summary['sheet_height']:g} {args.units}")
     print(f"Edge harmonics used (shared by every tile): {summary['harmonics']}")
 
 

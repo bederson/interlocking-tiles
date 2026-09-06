@@ -35,13 +35,12 @@ specific plywood batch, grain, moisture, and focus accuracy.
   path, and protects the lens.
 - Use the **cut** layer settings above for the red (`#FF0000`) outline
   paths.
-- The blue (`#0000FF`) decorative paths are solid 0.5"-wide filled shapes,
-  not thin lines — assign them to an **Engrave / Fill** (raster infill)
-  operation, not a line-trace **Score**, or the laser will only trace the
-  boundary and leave the channel's interior uncut. Fill engrave settings
-  vary more by look-preference than the cut settings above; start low-power
-  (~15-20%) at a moderate speed and do a test pass, since it's cosmetic and
-  forgiving.
+- The blue (`#0000FF`) decorative paths are a set of parallel open lines
+  (`--engrave-lines`, default 3) spanning the channel width — assign them
+  to a line-trace **Score/Engrave** operation, not Fill (there's no closed
+  shape to fill). Score settings vary more by look-preference than the cut
+  settings above; start low-power (~15-20%) at a moderate speed and do a
+  test pass, since it's cosmetic and forgiving.
 
 ## Safety
 
@@ -71,8 +70,8 @@ XTool's own newer `.xs` format, so hand-generating it would risk producing
 a file that silently fails to open. DXF is the standard, well-specified way
 to get exact scale without manual fiddling.
 
-1. Import `output/sheet_0001.dxf` (or an individual `tile_NNNN.dxf`) into
-   XTool Creative Space (XCS). If you use the `.svg` instead, import at
+1. Import `output/sheet_0001.dxf` (or an individual `pieces/tile_NNNN.dxf`)
+   into XTool Creative Space (XCS). If you use the `.svg` instead, import at
    **original size** — not "scale to fit canvas."
 2. Either way, click the object after import and **verify the exact width
    and height** (e.g. 2.000 in) in XCS's size field before cutting.
@@ -110,4 +109,13 @@ to get exact scale without manual fiddling.
    swapping them, and confirm they interlock in every combination and that
    the engraved arcs connect visually across tile boundaries. If using a
    frame, confirm the frame/corner pieces seat against the border tiles the
-   same way and the engraving continues smoothly into them.
+   same way and the engraving continues smoothly into them. Frame/corner
+   pieces connect to each other via a "keyhole"/dog-bone joint (a bulb
+   wider than its neck) on their short ends — place them going around the
+   border in **one consistent direction** (e.g. clockwise) so each tab
+   meets the next piece's socket; going the wrong way around presents two
+   tabs (or two sockets) to each other, which won't seat. Since the bulb is
+   wider than the neck opening, seating each joint takes a bit more than a
+   straight push — a slight flex or angled press, same as the tiles'
+   wiggly edges already require — but once seated it resists being pulled
+   straight back apart.

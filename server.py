@@ -62,17 +62,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             params = json.loads(self.rfile.read(length) or b"{}")
             summary = generate_tiles.generate_batch(params)
-            self._send_json(200, {
-                "ok": True,
-                "tile_count": summary["tile_count"],
-                "sheet_files": summary["sheet_files"],
-                "output_dir": summary["output_dir"],
-                "harmonics": summary["harmonics"],
-                "grid_cols": summary["grid_cols"],
-                "grid_rows": summary["grid_rows"],
-                "frame_count": summary["frame_count"],
-                "corner_count": summary["corner_count"],
-            })
+            response = {"ok": True}
+            response.update({k: summary[k] for k in generate_tiles.EXPORT_RESPONSE_FIELDS})
+            self._send_json(200, response)
         except Exception as exc:  # local dev tool: surface the error to the browser, don't crash the server
             self._send_json(400, {"ok": False, "error": str(exc)})
 

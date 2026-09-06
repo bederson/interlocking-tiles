@@ -70,31 +70,101 @@ function truchetFacePaths(size, motif, n = 24) {
 // bottom-left corner (corner) tile edge, exactly mirroring
 // frame_piece_outline / corner_piece_outline in generate_tiles.py -- see
 // that file's comments for why the tile-facing side is guaranteed to fit.
-function frameOutline(size, frameWidth, harmonics, n) {
-  const inner = edgePoints([0, 0], [size, 0], harmonics, n);
-  return inner.concat([[size, -frameWidth], [0, -frameWidth]]);
+//
+// Their short end caps get a "keyhole"/dog-bone connector (a neck
+// narrower than the bulb it leads to, so a mated pair can't be pulled
+// straight apart) instead of a plain straight edge, so pieces connect to
+// their neighbor around the border. One fixed convention (tab always at
+// the "x=size" end, socket always at the "start" end) makes every tab
+// meet the next piece's socket automatically going around the loop in one
+// consistent direction. Mirrors generate_tiles.py's CONNECTOR_* ratios.
+const CONNECTOR_NECK_RATIO = 0.15;
+const CONNECTOR_BULB_RADIUS_RATIO = 0.28;
+const CONNECTOR_STEM_RATIO = 0.35;
+
+function connectorProtrusion(frameWidth) {
+  return frameWidth * (CONNECTOR_STEM_RATIO + CONNECTOR_BULB_RADIUS_RATIO);
 }
 
-function frameEngraveRibbons(size, frameWidth, harmonics, engraveWidth) {
+function keyholeCapPoints(p0, p1, bulgeDirection, neckHalfWidth, bulbRadius, stemLength, n = 24) {
+  const mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+  const capDir = normalize([p1[0] - p0[0], p1[1] - p0[1]]);
+  const h = Math.sqrt(bulbRadius * bulbRadius - neckHalfWidth * neckHalfWidth);
+
+  const localToGlobal = (u, v) => [
+    mid[0] + capDir[0] * u + bulgeDirection[0] * v,
+    mid[1] + capDir[1] * u + bulgeDirection[1] * v,
+  ];
+
+  const center = localToGlobal(0, stemLength);
+  const bMinus = localToGlobal(-neckHalfWidth, 0);
+  const bPlus = localToGlobal(neckHalfWidth, 0);
+  const pMinus = localToGlobal(-neckHalfWidth, stemLength - h);
+  const pPlus = localToGlobal(neckHalfWidth, stemLength - h);
+
+  const angleFromCenter = (point) => {
+    const vx = point[0] - center[0];
+    const vy = point[1] - center[1];
+    const u = vx * capDir[0] + vy * capDir[1];
+    const v = vx * bulgeDirection[0] + vy * bulgeDirection[1];
+    return Math.atan2(v, u);
+  };
+
+  const phiMinus = angleFromCenter(pMinus);
+  const phiPlus = angleFromCenter(pPlus);
+  const twoPi = 2 * Math.PI;
+  const sweep = (((phiPlus - phiMinus) % twoPi) + twoPi) % twoPi - twoPi;
+
+  const arc = [];
+  for (let i = 0; i <= n; i++) {
+    const phi = phiMinus + (sweep * i) / n;
+    arc.push([
+      center[0] + bulbRadius * (Math.cos(phi) * capDir[0] + Math.sin(phi) * bulgeDirection[0]),
+      center[1] + bulbRadius * (Math.cos(phi) * capDir[1] + Math.sin(phi) * bulgeDirection[1]),
+    ]);
+  }
+  return [p0, bMinus].concat(arc, [bPlus, p1]);
+}
+
+function connectorCap(p0, p1, outwardDirection, kind, frameWidth) {
+  const neckHalfWidth = frameWidth * CONNECTOR_NECK_RATIO;
+  const bulbRadius = frameWidth * CONNECTOR_BULB_RADIUS_RATIO;
+  const stemLength = frameWidth * CONNECTOR_STEM_RATIO;
+  const bulge = kind === "tab" ? outwardDirection : [-outwardDirection[0], -outwardDirection[1]];
+  return keyholeCapPoints(p0, p1, bulge, neckHalfWidth, bulbRadius, stemLength);
+}
+
+function frameOutline(size, frameWidth, harmonics, n) {
+  const inner = edgePoints([0, 0], [size, 0], harmonics, n);
+  const tab = connectorCap([size, 0], [size, -frameWidth], [1, 0], "tab", frameWidth);
+  const socket = connectorCap([0, -frameWidth], [0, 0], [-1, 0], "socket", frameWidth);
+  return inner.slice(0, -1).concat(tab, [[0, -frameWidth]], socket.slice(1));
+}
+
+function frameEngraveLines(size, frameWidth, harmonics, engraveWidth, engraveLinesN) {
   const mid = size / 2;
   const overshoot = maxWiggleAmplitude(harmonics);
   const line = extendPolylineEnds([[mid, 0], [mid, -frameWidth]], overshoot);
-  return [thickenPolyline(line, engraveWidth)];
+  return parallelLines(line, engraveWidth, engraveLinesN);
 }
 
 function cornerOutline(size, frameWidth, harmonics, n) {
   const bottom = edgePoints([0, 0], [size, 0], harmonics, n).slice().reverse();
   const left = edgePoints([0, size], [0, 0], harmonics, n).slice().reverse();
   const inner = bottom.concat(left.slice(1));
-  return inner.concat([[-frameWidth, size], [-frameWidth, -frameWidth], [size, -frameWidth]]);
+  const tab = connectorCap([size, -frameWidth], [size, 0], [1, 0], "tab", frameWidth);
+  const socket = connectorCap([0, size], [-frameWidth, size], [0, 1], "socket", frameWidth);
+  return inner.slice(0, -1).concat(socket, [[-frameWidth, -frameWidth], [size, -frameWidth]], tab.slice(1));
 }
 
-function cornerEngraveRibbons(size, frameWidth, harmonics, engraveWidth) {
+function cornerEngraveLines(size, frameWidth, harmonics, engraveWidth, engraveLinesN) {
   const mid = size / 2;
   const overshoot = maxWiggleAmplitude(harmonics);
   const bottomLine = extendPolylineEnds([[mid, 0], [mid, -frameWidth]], overshoot);
   const leftLine = extendPolylineEnds([[0, mid], [-frameWidth, mid]], overshoot);
-  return [thickenPolyline(bottomLine, engraveWidth), thickenPolyline(leftLine, engraveWidth)];
+  return parallelLines(bottomLine, engraveWidth, engraveLinesN).concat(
+    parallelLines(leftLine, engraveWidth, engraveLinesN)
+  );
 }
 
 // Extend a centerline past both ends, continuing each end's local
@@ -120,10 +190,9 @@ function maxWiggleAmplitude(harmonics) {
   return harmonics.reduce((sum, [, a]) => sum + Math.abs(a), 0);
 }
 
-function thickenPolyline(points, width) {
-  const half = width / 2;
+function openPolylineNormals(points) {
   const n = points.length;
-  const left = [], right = [];
+  const normals = [];
   for (let i = 0; i < n; i++) {
     const segNormals = [];
     if (i > 0) {
@@ -135,11 +204,25 @@ function thickenPolyline(points, width) {
       segNormals.push(normalize([d[1], -d[0]]));
     }
     const sum = segNormals.reduce((a, b) => [a[0] + b[0], a[1] + b[1]], [0, 0]);
-    const normal = normalize(sum);
-    left.push([points[i][0] + normal[0] * half, points[i][1] + normal[1] * half]);
-    right.push([points[i][0] - normal[0] * half, points[i][1] - normal[1] * half]);
+    normals.push(normalize(sum));
   }
-  return left.concat(right.reverse());
+  return normals;
+}
+
+// Return `n` open polylines, evenly spaced across `width` and offset from
+// the centerline -- N distinct engraved strokes spanning the same width a
+// single filled channel would, rather than one solid band. n=1 places a
+// single line along the centerline itself.
+function parallelLines(points, width, n) {
+  const normals = openPolylineNormals(points);
+  let offsets;
+  if (n <= 1) {
+    offsets = [0];
+  } else {
+    const step = width / (n - 1);
+    offsets = Array.from({ length: n }, (_, i) => -width / 2 + i * step);
+  }
+  return offsets.map((off) => points.map((p, i) => [p[0] + normals[i][0] * off, p[1] + normals[i][1] * off]));
 }
 
 function offsetPolygon(points, delta) {
@@ -201,8 +284,6 @@ const UNIT_CONFIG = {
     amplitude: { min: 0.05, max: 0.5, step: 0.05, default: 0.25, decimals: 2 },
     kerf: { min: -0.02, max: 0.02, step: 0.005, default: 0, decimals: 3 },
     engraveWidth: { min: 0.1, max: 1.0, step: 0.05, default: 0.5, decimals: 2 },
-    sheetWidth: { step: 0.25, default: 36, decimals: 2 },
-    sheetHeight: { step: 0.25, default: 18, decimals: 2 },
     sheetMargin: 0.25,
   },
   mm: {
@@ -210,8 +291,6 @@ const UNIT_CONFIG = {
     amplitude: { min: 1, max: 12, step: 1, default: 6, decimals: 0 },
     kerf: { min: -0.5, max: 0.5, step: 0.1, default: 0, decimals: 2 },
     engraveWidth: { min: 2, max: 25, step: 1, default: 13, decimals: 0 },
-    sheetWidth: { step: 5, default: 900, decimals: 0 },
-    sheetHeight: { step: 5, default: 450, decimals: 0 },
     sheetMargin: 6,
   },
 };
@@ -241,10 +320,6 @@ function applyUnitConfig() {
   configureSlider(el("amplitude"), cfg.amplitude, el("amplitudeTicks"));
   configureSlider(el("kerf"), cfg.kerf, el("kerfTicks"));
   configureSlider(el("engraveWidth"), cfg.engraveWidth, el("engraveWidthTicks"));
-  el("sheetWidth").step = cfg.sheetWidth.step;
-  el("sheetWidth").value = cfg.sheetWidth.default;
-  el("sheetHeight").step = cfg.sheetHeight.step;
-  el("sheetHeight").value = cfg.sheetHeight.default;
   updateReadouts();
 }
 
@@ -254,36 +329,63 @@ function updateReadouts() {
   el("amplitudeValue").textContent = `${parseFloat(el("amplitude").value).toFixed(cfg.amplitude.decimals)} ${units}`;
   el("kerfValue").textContent = `${parseFloat(el("kerf").value).toFixed(cfg.kerf.decimals)} ${units}`;
   el("engraveWidthValue").textContent = `${parseFloat(el("engraveWidth").value).toFixed(cfg.engraveWidth.decimals)} ${units}`;
-  el("sheetWidthValue").textContent = units;
-  el("sheetHeightValue").textContent = units;
+  el("engraveLinesValue").textContent = el("engraveLines").value;
+  el("columnsValue").textContent = el("columns").value;
   el("wigglesValue").textContent = el("wiggles").value;
   el("countValue").textContent = el("count").value;
 }
 
-function sheetGridDims(size, sheetW, sheetH, margin) {
-  if (size + margin > sheetW || size + margin > sheetH) return null;
-  const cols = Math.max(1, Math.floor((sheetW + margin) / (size + margin)));
-  const rows = Math.max(1, Math.floor((sheetH + margin) / (size + margin)));
-  return { cols, rows };
+function frameAndCornerCounts(gridCols, gridRows) {
+  const frameCount = Math.max(0, 2 * (gridCols - 2)) + Math.max(0, 2 * (gridRows - 2));
+  const cornerCount = gridCols >= 2 && gridRows >= 2 ? 4 : 0;
+  return [frameCount, cornerCount];
+}
+
+// Mirrors flow_layout() in generate_tiles.py: tiles, frame pieces, and
+// corner pieces all flow `columns` per row regardless of each piece's own
+// size, and the material size needed is computed from that -- rather than
+// fitting a given target sheet size.
+function requiredMaterialSize(size, frameWidth, count, gridCols, gridRows, columns, margin) {
+  const [frameCount, cornerCount] = frameAndCornerCounts(gridCols, gridRows);
+  const r = connectorProtrusion(frameWidth);
+  const items = [];
+  for (let i = 0; i < count; i++) items.push({ width: size, height: size });
+  for (let i = 0; i < frameCount; i++) items.push({ width: size + r, height: frameWidth });
+  for (let i = 0; i < cornerCount; i++) items.push({ width: size + frameWidth + r, height: size + frameWidth });
+
+  let cursorY = margin;
+  let sheetW = margin;
+  for (let start = 0; start < items.length; start += columns) {
+    const row = items.slice(start, start + columns);
+    let cursorX = margin;
+    let rowHeight = 0;
+    for (const item of row) {
+      cursorX += item.width + margin;
+      rowHeight = Math.max(rowHeight, item.height);
+    }
+    sheetW = Math.max(sheetW, cursorX);
+    cursorY += rowHeight + margin;
+  }
+  return { sheetW, sheetH: cursorY, frameCount, cornerCount, totalItems: items.length };
 }
 
 function updateSheetStatus() {
   const size = parseFloat(el("size").value);
-  const sheetW = parseFloat(el("sheetWidth").value);
-  const sheetH = parseFloat(el("sheetHeight").value);
+  const frameWidth = size / 2;
   const margin = UNIT_CONFIG[units].sheetMargin;
   const count = parseInt(el("count").value, 10);
+  const columns = parseInt(el("columns").value, 10);
+  const gridCols = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const gridRows = Math.max(1, Math.ceil(count / gridCols));
+
+  const { sheetW, sheetH, frameCount, cornerCount, totalItems } = requiredMaterialSize(
+    size, frameWidth, count, gridCols, gridRows, columns, margin
+  );
   const statusEl = el("sheetStatus");
-  const dims = sheetGridDims(size, sheetW, sheetH, margin);
-  if (!dims) {
-    statusEl.textContent = `⚠ A ${size} ${units} tile does not fit on a ${sheetW} × ${sheetH} ${units} sheet.`;
-    statusEl.classList.add("error");
-    return;
-  }
   statusEl.classList.remove("error");
-  const perSheet = dims.cols * dims.rows;
-  const sheetCount = Math.ceil(count / perSheet);
-  statusEl.textContent = `${dims.cols} × ${dims.rows} = ${perSheet} tiles per sheet → ${sheetCount} sheet${sheetCount === 1 ? "" : "s"} for ${count} tiles.`;
+  statusEl.textContent =
+    `${count} tiles + ${frameCount} frame + ${cornerCount} corner = ${totalItems} pieces, ` +
+    `${columns} per row → required material: ${sheetW.toFixed(2)} × ${sheetH.toFixed(2)} ${units}.`;
 }
 
 function currentEdgeMode() {
@@ -305,6 +407,7 @@ function redraw() {
   const size = parseFloat(el("size").value);
   const kerf = parseFloat(el("kerf").value);
   const engraveWidth = parseFloat(el("engraveWidth").value);
+  const engraveLinesN = parseInt(el("engraveLines").value, 10);
   const harmonics = currentHarmonics();
   const samples = 60;
 
@@ -319,7 +422,7 @@ function redraw() {
   const rotRng = mulberry32(previewSeed);
   const motifRng = mulberry32(previewSeed + 99991);
   const rotations = [0, 90, 180, 270];
-  const frameWidth = size / 3;
+  const frameWidth = size / 2;
 
   const svg = el("previewSvg");
   svg.setAttribute(
@@ -330,7 +433,7 @@ function redraw() {
 
   const strokeWidth = size * 0.008;
 
-  const drawPiece = (cutPts, ribbons, transform) => {
+  const drawPiece = (cutPts, engraveLines, transform) => {
     const g = document.createElementNS(svgNS, "g");
     g.setAttribute("transform", transform);
     const cutEl = document.createElementNS(svgNS, "path");
@@ -339,12 +442,13 @@ function redraw() {
     cutEl.setAttribute("stroke", "#d1372c");
     cutEl.setAttribute("stroke-width", strokeWidth);
     g.appendChild(cutEl);
-    for (const ribbon of ribbons) {
-      const ribbonEl = document.createElementNS(svgNS, "path");
-      ribbonEl.setAttribute("d", pointsToPath(ribbon, true));
-      ribbonEl.setAttribute("fill", "#2b5fb0");
-      ribbonEl.setAttribute("stroke", "none");
-      g.appendChild(ribbonEl);
+    for (const line of engraveLines) {
+      const lineEl = document.createElementNS(svgNS, "path");
+      lineEl.setAttribute("d", pointsToPath(line, false));
+      lineEl.setAttribute("fill", "none");
+      lineEl.setAttribute("stroke", "#2b5fb0");
+      lineEl.setAttribute("stroke-width", strokeWidth);
+      g.appendChild(lineEl);
     }
     svg.appendChild(g);
   };
@@ -354,10 +458,10 @@ function redraw() {
     const col = i % gridCols;
     const angle = rotations[Math.floor(rotRng() * rotations.length)];
     const motif = MOTIFS[Math.floor(motifRng() * MOTIFS.length)];
-    const ribbons = truchetFacePaths(size, motif).map((arc) =>
-      thickenPolyline(extendPolylineEnds(arc, overshoot), engraveWidth)
+    const engraveLines = truchetFacePaths(size, motif).flatMap((arc) =>
+      parallelLines(extendPolylineEnds(arc, overshoot), engraveWidth, engraveLinesN)
     );
-    drawPiece(outline, ribbons, `translate(${col * size},${row * size}) rotate(${angle},${size / 2},${size / 2})`);
+    drawPiece(outline, engraveLines, `translate(${col * size},${row * size}) rotate(${angle},${size / 2},${size / 2})`);
   }
 
   // Frame/corner pieces around the grid's border, in their correct
@@ -367,9 +471,9 @@ function redraw() {
   // shares the same edge curve no matter its rotation.
   if (gridCols >= 2 && gridRows >= 2) {
     const fOutline = frameOutline(size, frameWidth, harmonics, samples);
-    const fRibbons = frameEngraveRibbons(size, frameWidth, harmonics, engraveWidth);
+    const fLines = frameEngraveLines(size, frameWidth, harmonics, engraveWidth, engraveLinesN);
     const cOutline = cornerOutline(size, frameWidth, harmonics, samples);
-    const cRibbons = cornerEngraveRibbons(size, frameWidth, harmonics, engraveWidth);
+    const cLines = cornerEngraveLines(size, frameWidth, harmonics, engraveWidth, engraveLinesN);
 
     for (let row = 0; row < gridRows; row++) {
       for (let col = 0; col < gridCols; col++) {
@@ -379,10 +483,10 @@ function redraw() {
 
         if ((isTop || isBottom) && (isLeft || isRight)) {
           const angle = isTop && isLeft ? 0 : isTop && isRight ? 90 : isBottom && isRight ? 180 : 270;
-          drawPiece(cOutline, cRibbons, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
+          drawPiece(cOutline, cLines, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
         } else if (isTop || isBottom || isLeft || isRight) {
           const angle = isTop ? 0 : isBottom ? 180 : isRight ? 90 : 270;
-          drawPiece(fOutline, fRibbons, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
+          drawPiece(fOutline, fLines, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
         }
       }
     }
@@ -401,6 +505,28 @@ function harmonicsToSpec(harmonics) {
   return harmonics.map(([k, a]) => `${k}:${a}`).join(",");
 }
 
+// Same export call works two ways: the web console posts to the local
+// python server; the native macOS app (no server, per its design) instead
+// has a WKScriptMessageHandlerWithReply bridge registered as
+// `window.webkit.messageHandlers.export`, which runs the identical
+// generate_tiles.generate_batch() in-process via a small Python bridge
+// script and replies with the same JSON shape -- so this is the only
+// place doExport() needs to know which host it's running in.
+async function exportRequest(payload) {
+  const nativeBridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.export;
+  if (nativeBridge) {
+    return await nativeBridge.postMessage(payload);
+  }
+  const resp = await fetch("/api/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok && !data.error) throw new Error(`HTTP ${resp.status}`);
+  return data;
+}
+
 async function doExport() {
   const status = el("exportStatus");
   status.textContent = "Exporting…";
@@ -411,24 +537,19 @@ async function doExport() {
     harmonics: harmonicsToSpec(currentHarmonics()),
     kerf_adjust: parseFloat(el("kerf").value),
     engrave_width: parseFloat(el("engraveWidth").value),
+    engrave_lines: parseInt(el("engraveLines").value, 10),
     count: parseInt(el("count").value, 10),
     face_seed: parseInt(el("faceSeed").value, 10),
     output_dir: el("outputDir").value || null,
-    sheet_width: parseFloat(el("sheetWidth").value),
-    sheet_height: parseFloat(el("sheetHeight").value),
+    columns: parseInt(el("columns").value, 10),
   };
   try {
-    const resp = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    const data = await exportRequest(payload);
+    if (!data.ok) throw new Error(data.error || "export failed");
     status.textContent =
       `Wrote ${data.tile_count} tiles + ${data.frame_count} frame + ${data.corner_count} corner piece(s) ` +
-      `for a ${data.grid_cols}x${data.grid_rows} grid, combined into ${data.sheet_files.length} sheet(s) ` +
-      `(SVG+DXF+PDF), to ${data.output_dir}/`;
+      `for a ${data.grid_cols}x${data.grid_rows} grid, ${data.columns} per row → required material ` +
+      `${data.sheet_width.toFixed(2)} × ${data.sheet_height.toFixed(2)} ${units}, to ${data.output_dir}/`;
   } catch (err) {
     status.textContent = `Error: ${err.message}`;
   }
@@ -441,8 +562,8 @@ async function doExport() {
 
 const STORAGE_KEY = "tileConsole.controls";
 const PERSISTED_FIELD_IDS = [
-  "size", "amplitude", "wiggles", "edgeSeed", "kerf", "engraveWidth",
-  "count", "faceSeed", "sheetWidth", "sheetHeight", "outputDir",
+  "size", "amplitude", "wiggles", "edgeSeed", "kerf", "engraveWidth", "engraveLines",
+  "count", "faceSeed", "columns", "outputDir",
 ];
 
 function currentControlState() {
@@ -500,9 +621,9 @@ function wireEvents() {
     })
   );
 
-  ["size", "amplitude", "wiggles", "kerf", "engraveWidth", "count"].forEach((id) => el(id).addEventListener("input", redraw));
+  ["size", "amplitude", "wiggles", "kerf", "engraveWidth", "engraveLines", "count"].forEach((id) => el(id).addEventListener("input", redraw));
   el("edgeSeed").addEventListener("input", redraw);
-  ["sheetWidth", "sheetHeight"].forEach((id) => el(id).addEventListener("input", updateSheetStatus));
+  el("columns").addEventListener("input", updateSheetStatus);
 
   el("edgeSeedRandomize").addEventListener("click", () => {
     el("edgeSeed").value = Math.floor(Math.random() * 100000);
