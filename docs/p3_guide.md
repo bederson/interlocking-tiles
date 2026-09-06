@@ -58,7 +58,9 @@ specific plywood batch, grain, moisture, and focus accuracy.
 
 ## Importing the file correctly
 
-The generator writes both an `.svg` and a `.dxf` for every tile and sheet.
+The generator writes an `.svg` and a `.dxf` for every tile and sheet, plus
+a combined `.pdf` for each sheet (a reference/print document showing the
+whole layout at a glance — not meant for import into XCS; use the DXF).
 **Prefer the `.dxf`** if you hit any scale weirdness — SVG has no inherent
 physical unit and different tools assume different DPI, which is the single
 most common source of "my part came out the wrong size" problems. DXF
@@ -99,8 +101,9 @@ to get exact scale without manual fiddling.
    `--grid-cols`/`--grid-rows` if you're finishing the mosaic with a frame) —
    keep the same `--edge-seed` you validated with, and use whatever
    `--face-seed` you like for visual variety. This also cuts the matching
-   frame and corner pieces (`frame_sheet_000N`) — same cut/kerf settings as
-   the tiles, since their tile-facing edge uses the identical curve.
+   frame and corner pieces, nested onto the same `sheet_000N` file(s) as the
+   tiles — same cut/kerf settings, since their tile-facing edge uses the
+   identical curve.
 7. Lightly sand the cut edges (fine grit) to knock off any laser char and
    ease friction at the interlock.
 8. Do a full assembly test: arrange tiles in a grid, freely rotating and

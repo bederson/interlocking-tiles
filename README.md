@@ -55,8 +55,8 @@ motif ended up on the neighboring tile.
 All frame pieces are identical (as are all corner pieces) — like tiles,
 they're exported unrotated and rotated by hand during assembly. Files:
 `frame_0001.svg`/`.dxf`, `corner_0001.svg`/`.dxf` (individually, for
-inspection), plus `frame_sheet_0001.svg`/`.dxf` packing all of them
-together for cutting.
+inspection), and nested alongside the tiles in the combined `sheet_0001.*`
+files below rather than a separate sheet, for more efficient material use.
 
 ## Output files
 
@@ -76,15 +76,16 @@ This starts the server and opens the console in your browser automatically
 `./run.sh 8080`). Or run `python3 server.py` yourself and open the printed
 URL manually. Drag the sliders to preview the tile shape live — the preview
 grid always shows exactly the number of tiles set by "Tiles to export", each
-in a random rotation, demonstrating the edges mesh in every orientation.
-Enter your material's width/height under "Material sheet to cut on" and the
-console live-updates how many tiles fit per sheet and how many sheets are
-needed, flagging an error if a single tile won't fit at all. Click
-**Export to disk** to write the real SVG + DXF files — the export always
-uses the same `generate_tiles.py` code the CLI uses, so what you preview is
-exactly what gets written. Sliders snap to clean increments (inches in
-quarter-inch steps, etc.) so you don't end up with odd decimal values baked
-into the design.
+in a random rotation, demonstrating the edges mesh in every orientation,
+wrapped in the matching frame/corner border pieces shown in their correct
+assembly orientation. Enter your material's width/height under "Material
+sheet to cut on" and the console live-updates how many tiles fit per sheet
+and how many sheets are needed, flagging an error if a single tile won't fit
+at all. Click **Export to disk** to write the real SVG + DXF + PDF files —
+the export always uses the same `generate_tiles.py` code the CLI uses, so
+what you preview is exactly what gets written. Sliders snap to clean
+increments (inches in quarter-inch steps, etc.) so you don't end up with odd
+decimal values baked into the design.
 
 Control values are saved in your browser (`localStorage`) as you change
 them, so reopening the console later picks up where you left off. This is
@@ -96,9 +97,12 @@ per-browser, not shared or synced anywhere.
 python3 generate_tiles.py --count 9 --edge-seed 42 --face-seed 7
 ```
 
-This writes, per tile, both `tile_0001.svg`/`tile_0001.dxf` ... (for
-inspection/editing) and a batch `sheet_0001.svg`/`sheet_0001.dxf` laid out
-on a P3-sized bed.
+This writes, per piece, individual `tile_0001.svg`/`.dxf`, `frame_0001.svg`/`.dxf`,
+`corner_0001.svg`/`.dxf` files (for inspection/editing), plus one combined
+`sheet_0001.svg`/`.dxf`/`.pdf` per sheet of material — tiles, frame pieces,
+and corner pieces all together (frame/corner nested into the leftover space
+beside and below the tile grid, rather than a separate sheet, for more
+efficient material use).
 
 - **SVG** is for humans — open it in a browser, Illustrator, or Inkscape to
   eyeball the design.
@@ -106,6 +110,11 @@ on a P3-sized bed.
   units, so it avoids the classic "SVG imported at the wrong scale" problem
   (see [docs/p3_guide.md](docs/p3_guide.md)). Prefer importing the `.dxf`
   file into XCS if you hit any scale issues with the SVG.
+- **PDF** is a single combined reference/print document showing the whole
+  sheet layout at once — handy for a print-and-check-against-the-material
+  step, or just to see everything together. Generated from scratch (no
+  dependency); not intended as a laser-cut source format, use the DXF for
+  that.
 
 Key options:
 

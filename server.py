@@ -72,7 +72,6 @@ class Handler(BaseHTTPRequestHandler):
                 "grid_rows": summary["grid_rows"],
                 "frame_count": summary["frame_count"],
                 "corner_count": summary["corner_count"],
-                "frame_sheet_files": summary["frame_sheet_files"],
             })
         except Exception as exc:  # local dev tool: surface the error to the browser, don't crash the server
             self._send_json(400, {"ok": False, "error": str(exc)})

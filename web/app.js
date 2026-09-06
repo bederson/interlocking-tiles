@@ -66,6 +66,37 @@ function truchetFacePaths(size, motif, n = 24) {
   ];
 }
 
+// Frame/corner pieces: built against a canonical bottom (frame) or
+// bottom-left corner (corner) tile edge, exactly mirroring
+// frame_piece_outline / corner_piece_outline in generate_tiles.py -- see
+// that file's comments for why the tile-facing side is guaranteed to fit.
+function frameOutline(size, frameWidth, harmonics, n) {
+  const inner = edgePoints([0, 0], [size, 0], harmonics, n);
+  return inner.concat([[size, -frameWidth], [0, -frameWidth]]);
+}
+
+function frameEngraveRibbons(size, frameWidth, harmonics, engraveWidth) {
+  const mid = size / 2;
+  const overshoot = maxWiggleAmplitude(harmonics);
+  const line = extendPolylineEnds([[mid, 0], [mid, -frameWidth]], overshoot);
+  return [thickenPolyline(line, engraveWidth)];
+}
+
+function cornerOutline(size, frameWidth, harmonics, n) {
+  const bottom = edgePoints([0, 0], [size, 0], harmonics, n).slice().reverse();
+  const left = edgePoints([0, size], [0, 0], harmonics, n).slice().reverse();
+  const inner = bottom.concat(left.slice(1));
+  return inner.concat([[-frameWidth, size], [-frameWidth, -frameWidth], [size, -frameWidth]]);
+}
+
+function cornerEngraveRibbons(size, frameWidth, harmonics, engraveWidth) {
+  const mid = size / 2;
+  const overshoot = maxWiggleAmplitude(harmonics);
+  const bottomLine = extendPolylineEnds([[mid, 0], [mid, -frameWidth]], overshoot);
+  const leftLine = extendPolylineEnds([[0, mid], [-frameWidth, mid]], overshoot);
+  return [thickenPolyline(bottomLine, engraveWidth), thickenPolyline(leftLine, engraveWidth)];
+}
+
 // Extend a centerline past both ends, continuing each end's local
 // direction. Every motif centerline stops exactly at an edge's flat,
 // unwiggled midpoint, but the real cut edge immediately bows outward (a
@@ -288,34 +319,26 @@ function redraw() {
   const rotRng = mulberry32(previewSeed);
   const motifRng = mulberry32(previewSeed + 99991);
   const rotations = [0, 90, 180, 270];
+  const frameWidth = size / 3;
 
   const svg = el("previewSvg");
-  svg.setAttribute("viewBox", `0 0 ${size * gridCols} ${size * gridRows}`);
+  svg.setAttribute(
+    "viewBox",
+    `${-frameWidth} ${-frameWidth} ${size * gridCols + 2 * frameWidth} ${size * gridRows + 2 * frameWidth}`
+  );
   svg.innerHTML = "";
 
   const strokeWidth = size * 0.008;
 
-  for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / gridCols);
-    const col = i % gridCols;
-    const angle = rotations[Math.floor(rotRng() * rotations.length)];
-    const motif = MOTIFS[Math.floor(motifRng() * MOTIFS.length)];
+  const drawPiece = (cutPts, ribbons, transform) => {
     const g = document.createElementNS(svgNS, "g");
-    g.setAttribute(
-      "transform",
-      `translate(${col * size},${row * size}) rotate(${angle},${size / 2},${size / 2})`
-    );
-
+    g.setAttribute("transform", transform);
     const cutEl = document.createElementNS(svgNS, "path");
-    cutEl.setAttribute("d", cutPath);
+    cutEl.setAttribute("d", pointsToPath(cutPts, true));
     cutEl.setAttribute("fill", "none");
     cutEl.setAttribute("stroke", "#d1372c");
     cutEl.setAttribute("stroke-width", strokeWidth);
     g.appendChild(cutEl);
-
-    const ribbons = truchetFacePaths(size, motif).map((arc) =>
-      thickenPolyline(extendPolylineEnds(arc, overshoot), engraveWidth)
-    );
     for (const ribbon of ribbons) {
       const ribbonEl = document.createElementNS(svgNS, "path");
       ribbonEl.setAttribute("d", pointsToPath(ribbon, true));
@@ -323,14 +346,53 @@ function redraw() {
       ribbonEl.setAttribute("stroke", "none");
       g.appendChild(ribbonEl);
     }
-
     svg.appendChild(g);
+  };
+
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / gridCols);
+    const col = i % gridCols;
+    const angle = rotations[Math.floor(rotRng() * rotations.length)];
+    const motif = MOTIFS[Math.floor(motifRng() * MOTIFS.length)];
+    const ribbons = truchetFacePaths(size, motif).map((arc) =>
+      thickenPolyline(extendPolylineEnds(arc, overshoot), engraveWidth)
+    );
+    drawPiece(outline, ribbons, `translate(${col * size},${row * size}) rotate(${angle},${size / 2},${size / 2})`);
+  }
+
+  // Frame/corner pieces around the grid's border, in their correct
+  // orientation for that position (unlike tiles, these aren't rotation-
+  // agnostic) -- demonstrating the frame fits regardless of how each
+  // border tile above happened to be randomly rotated, since every tile
+  // shares the same edge curve no matter its rotation.
+  if (gridCols >= 2 && gridRows >= 2) {
+    const fOutline = frameOutline(size, frameWidth, harmonics, samples);
+    const fRibbons = frameEngraveRibbons(size, frameWidth, harmonics, engraveWidth);
+    const cOutline = cornerOutline(size, frameWidth, harmonics, samples);
+    const cRibbons = cornerEngraveRibbons(size, frameWidth, harmonics, engraveWidth);
+
+    for (let row = 0; row < gridRows; row++) {
+      for (let col = 0; col < gridCols; col++) {
+        const isTop = row === 0, isBottom = row === gridRows - 1;
+        const isLeft = col === 0, isRight = col === gridCols - 1;
+        const tx = col * size, ty = row * size;
+
+        if ((isTop || isBottom) && (isLeft || isRight)) {
+          const angle = isTop && isLeft ? 0 : isTop && isRight ? 90 : isBottom && isRight ? 180 : 270;
+          drawPiece(cOutline, cRibbons, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
+        } else if (isTop || isBottom || isLeft || isRight) {
+          const angle = isTop ? 0 : isBottom ? 180 : isRight ? 90 : 270;
+          drawPiece(fOutline, fRibbons, `translate(${tx},${ty}) rotate(${angle},${size / 2},${size / 2})`);
+        }
+      }
+    }
   }
 
   el("previewCaption").textContent =
     `Preview of all ${count} tile${count === 1 ? "" : "s"} you're about to export, each shown in a random ` +
-    "rotation (0/90/180/270°) to demonstrate every orientation still interlocks. Red = cut, blue = engrave. " +
-    "The exported files themselves are unrotated -- physical rotation happens when you place the cut tiles.";
+    "rotation (0/90/180/270°) to demonstrate every orientation still interlocks, framed by the matching " +
+    "frame/corner border pieces (shown here in their correct assembly orientation). Red = cut, blue = engrave. " +
+    "The exported tile files themselves are unrotated -- physical rotation happens when you place the cut tiles.";
 
   updateSheetStatus();
 }
@@ -364,9 +426,9 @@ async function doExport() {
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     status.textContent =
-      `Wrote ${data.tile_count} tiles + ${data.sheet_files.length} sheet(s), ` +
-      `${data.frame_count} frame + ${data.corner_count} corner piece(s) for a ` +
-      `${data.grid_cols}x${data.grid_rows} grid, to ${data.output_dir}/`;
+      `Wrote ${data.tile_count} tiles + ${data.frame_count} frame + ${data.corner_count} corner piece(s) ` +
+      `for a ${data.grid_cols}x${data.grid_rows} grid, combined into ${data.sheet_files.length} sheet(s) ` +
+      `(SVG+DXF+PDF), to ${data.output_dir}/`;
   } catch (err) {
     status.textContent = `Error: ${err.message}`;
   }

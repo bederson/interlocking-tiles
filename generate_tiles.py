@@ -375,6 +375,80 @@ def write_tile_dxf(path, units, cut_points, engrave_ribbons):
 
 
 # ---------------------------------------------------------------------------
+# PDF output (a single combined reference/print document -- built from
+# scratch, no dependency, since only a handful of PDF primitives are
+# needed: one page, straight-line paths, fill and stroke).
+#
+# PDF pages are sized in points (72/inch) with the origin at the bottom
+# left; like DXF (which just reuses our raw coordinates unflipped), no
+# vertical flip is applied here either, for consistency between the two --
+# harmless, since the design's interlock is symmetric either way.
+# ---------------------------------------------------------------------------
+
+def _pdf_points_per_unit(units):
+    return 72.0 / 25.4 if units == "mm" else 72.0
+
+
+def _pdf_path_ops(points, scale):
+    if not points:
+        return ""
+    ops = [f"{points[0][0] * scale:.3f} {points[0][1] * scale:.3f} m"]
+    ops += [f"{x * scale:.3f} {y * scale:.3f} l" for x, y in points[1:]]
+    ops.append("h")
+    return " ".join(ops)
+
+
+def pdf_document(sheet_w, sheet_h, units, cut_polys, engrave_polys):
+    scale = _pdf_points_per_unit(units)
+    width_pt, height_pt = sheet_w * scale, sheet_h * scale
+
+    lines = []
+    if cut_polys:
+        r, g, b = tuple(int(CUT_COLOR[i : i + 2], 16) / 255 for i in (1, 3, 5))
+        lines.append(f"{r:.3f} {g:.3f} {b:.3f} RG")
+        lines.append("0.5 w")
+        for pts in cut_polys:
+            lines.append(_pdf_path_ops(pts, scale))
+            lines.append("S")
+    if engrave_polys:
+        r, g, b = tuple(int(ENGRAVE_COLOR[i : i + 2], 16) / 255 for i in (1, 3, 5))
+        lines.append(f"{r:.3f} {g:.3f} {b:.3f} rg")
+        for pts in engrave_polys:
+            lines.append(_pdf_path_ops(pts, scale))
+            lines.append("f")
+    content_bytes = "\n".join(lines).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width_pt:.3f} {height_pt:.3f}] "
+            f"/Contents 4 0 R /Resources << >> >>"
+        ).encode("latin-1"),
+        f"<< /Length {len(content_bytes)} >>\nstream\n".encode("latin-1") + content_bytes + b"\nendstream",
+    ]
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode("latin-1") + body + b"\nendobj\n"
+    xref_offset = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode("latin-1")
+    out += b"0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode("latin-1")
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF"
+    ).encode("latin-1")
+    return bytes(out)
+
+
+def write_sheet_pdf(path, sheet_w, sheet_h, units, cut_polys, engrave_polys):
+    path.write_bytes(pdf_document(sheet_w, sheet_h, units, cut_polys, engrave_polys))
+
+
+# ---------------------------------------------------------------------------
 # Sheet layout (batch of tiles on one P3-bed-sized page, SVG + DXF)
 # ---------------------------------------------------------------------------
 
@@ -393,135 +467,127 @@ def sheet_grid_dims(size, sheet_w, sheet_h, margin):
     return cols, rows
 
 
-def build_sheets(output_dir, tiles, size, units, sheet_w, sheet_h, margin):
-    """Lay tiles out in a grid across one or more sheets.
+def pack_into_region(items, region_x, region_y, region_w, region_h, margin):
+    """Shelf-pack items (dicts with 'width'/'height') into a bounded
+    rectangle on the sheet, left-to-right then top-to-bottom. Not
+    space-optimal, but robust for the modest number of pieces a frame
+    needs. Returns (placements, leftover) -- placements is a list of
+    (item, x, y) giving where that item's own (min_x, min_y) bounding-box
+    corner lands; leftover is the items (in order) that didn't fit.
+    """
+    placements = []
+    cursor_x, shelf_y, shelf_height, shelf_has_item = region_x + margin, region_y + margin, 0.0, False
+    idx = 0
+    for item in items:
+        w, h = item["width"], item["height"]
+        if w + 2 * margin > region_w:
+            break  # doesn't fit in this region on any shelf, regardless of state
+        if shelf_has_item and cursor_x + w > region_x + region_w - margin:
+            cursor_x, shelf_y, shelf_height, shelf_has_item = region_x + margin, shelf_y + shelf_height + margin, 0.0, False
+        if shelf_y + h > region_y + region_h - margin:
+            break
+        placements.append((item, cursor_x, shelf_y))
+        cursor_x += w + margin
+        shelf_height = max(shelf_height, h)
+        shelf_has_item = True
+        idx += 1
+    return placements, items[idx:]
 
-    All tiles' cut outlines land in one CUT group/layer and all their
-    engrave ribbons in one ENGRAVE group/layer (see svg_groups) -- so the
-    whole sheet's cuts, or its whole engrave fill, is one selectable object
-    in XCS, not one object per tile.
 
-    Returns a list of (svg_path, dxf_path) pairs, one per sheet written.
+def validate_piece_fits(width, height, sheet_w, sheet_h, margin, label):
+    if width + 2 * margin > sheet_w or height + 2 * margin > sheet_h:
+        raise ValueError(f"A {label} ({width:g} x {height:g}) does not fit on a {sheet_w:g} x {sheet_h:g} sheet.")
+
+
+def compute_combined_layout(tiles, frame_items, corner_items, size, sheet_w, sheet_h, margin):
+    """Lay out tiles in their grid, then nest frame/corner pieces into the
+    leftover sheet space beside and below that grid -- rather than a wholly
+    separate sheet -- for more efficient material usage. Falls back to
+    dedicated sheets for any pieces that don't fit alongside tiles.
+
+    Returns a list of sheets; each sheet is a list of placement dicts:
+    {'cut_points': [...], 'engrave_ribbons': [[...], ...]}, already in
+    absolute sheet coordinates.
     """
     cols, rows = sheet_grid_dims(size, sheet_w, sheet_h, margin)
     per_sheet = cols * rows
-    stroke_width = size * 0.002
+    # Tallest first packs a little more efficiently into the leftover strips.
+    pending = sorted(list(frame_items) + list(corner_items), key=lambda it: -it["height"])
 
-    written = []
-    for sheet_idx in range(0, len(tiles), per_sheet):
-        chunk = tiles[sheet_idx : sheet_idx + per_sheet]
-        cut_path_ds, engrave_path_ds = [], []
-        dxf_entities = []
+    def place(item, shift_x, shift_y):
+        return {
+            "cut_points": [(x + shift_x, y + shift_y) for x, y in item["cut_points"]],
+            "engrave_ribbons": [[(x + shift_x, y + shift_y) for x, y in r] for r in item["engrave_ribbons"]],
+        }
+
+    sheets = []
+    tile_idx = 0
+    while tile_idx < len(tiles) or pending:
+        chunk = tiles[tile_idx : tile_idx + per_sheet]
+        tile_idx += len(chunk)
+        placements = []
+
         for i, tile in enumerate(chunk):
             col, row = i % cols, i // cols
-            ox = margin + col * (size + margin)
-            oy = margin + row * (size + margin)
-            cut = [(x + ox, y + oy) for x, y in tile["cut_points"]]
-            ribbons = [[(x + ox, y + oy) for x, y in ribbon] for ribbon in tile["engrave_ribbons"]]
+            ox, oy = margin + col * (size + margin), margin + row * (size + margin)
+            placements.append(place(tile, ox, oy))
 
-            cut_path_ds.append(points_to_svg_path(cut, closed=True))
-            engrave_path_ds.extend(points_to_svg_path(ribbon, closed=True) for ribbon in ribbons)
+        if chunk:
+            # cols_used is the sheet's full column capacity only if at least
+            # one row is completely full; otherwise it's just this single
+            # (partial) row's tile count -- reclaiming the rest of the width
+            # for frame/corner nesting instead of reserving the sheet's full
+            # capacity for however many tiles actually got cut.
+            cols_used = cols if len(chunk) > cols else len(chunk)
+            block_right = cols_used * (size + margin)
+            block_bottom = math.ceil(len(chunk) / cols) * (size + margin)
+        else:
+            block_right = block_bottom = 0.0
 
-            dxf_entities += _dxf_polyline_lines(cut, "CUT", 1, closed=True)
-            for ribbon in ribbons:
-                dxf_entities += _dxf_polyline_lines(ribbon, "ENGRAVE", 5, closed=True)
+        right_placed, pending = pack_into_region(pending, block_right, 0.0, sheet_w - block_right, sheet_h, margin)
+        bottom_placed, pending = pack_into_region(pending, 0.0, block_bottom, block_right, sheet_h - block_bottom, margin)
+        for item, px, py in right_placed + bottom_placed:
+            placements.append(place(item, px - item["min_x"], py - item["min_y"]))
 
-        sheet_number = sheet_idx // per_sheet + 1
-        svg = (
-            f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{sheet_w}{units}" height="{sheet_h}{units}" '
-            f'viewBox="0 0 {sheet_w} {sheet_h}">\n'
-            f"{svg_groups(cut_path_ds, engrave_path_ds, stroke_width)}\n</svg>\n"
-        )
-        svg_path = output_dir / f"sheet_{sheet_number:04d}.svg"
-        svg_path.write_text(svg)
+        if not placements and pending:
+            raise ValueError("A frame or corner piece does not fit on the given sheet size.")
+        sheets.append(placements)
 
-        dxf_path = output_dir / f"sheet_{sheet_number:04d}.dxf"
-        dxf_path.write_text(_dxf_document(dxf_entities, units))
-
-        written.append((svg_path, dxf_path))
-    return written
-
-
-def pack_shelves(items, sheet_w, sheet_h, margin):
-    """Simple left-to-right, top-to-bottom shelf packing for rectangles of
-    varying size (frame pieces and corner pieces have different footprints,
-    unlike the uniform tile grid build_sheets handles). Not space-optimal,
-    but robust for the modest number of pieces a frame needs.
-
-    `items` is a list of dicts with 'width'/'height'. Returns a list of
-    sheets, each a list of (item, x, y) placements, where (x, y) is where
-    that item's own (min_x, min_y) bounding-box corner lands on the sheet.
-    """
-    sheets = []
-    current = []
-    cursor_x = margin
-    shelf_y = margin
-    shelf_height = 0
-    for item in items:
-        w, h = item["width"], item["height"]
-        if w + 2 * margin > sheet_w or h + 2 * margin > sheet_h:
-            raise ValueError(f"A {w:g} x {h:g} piece does not fit on a {sheet_w:g} x {sheet_h:g} sheet.")
-        if current and cursor_x + w > sheet_w - margin:
-            cursor_x = margin
-            shelf_y += shelf_height + margin
-            shelf_height = 0
-        if current and shelf_y + h > sheet_h - margin:
-            sheets.append(current)
-            current = []
-            cursor_x = margin
-            shelf_y = margin
-            shelf_height = 0
-        current.append((item, cursor_x, shelf_y))
-        cursor_x += w + margin
-        shelf_height = max(shelf_height, h)
-    if current:
-        sheets.append(current)
     return sheets
 
 
-def build_frame_sheets(output_dir, items, units, sheet_w, sheet_h, margin):
-    """Pack frame and corner pieces onto sheet(s), same CUT/ENGRAVE grouping
-    as build_sheets. Each item dict needs 'cut_points', 'engrave_ribbons',
-    'width', 'height', 'min_x', 'min_y' (its nominal bounding box).
-
-    Returns a list of (svg_path, dxf_path) pairs, one per sheet written.
-    """
-    if not items:
-        return []
-    packed_sheets = pack_shelves(items, sheet_w, sheet_h, margin)
+def write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, sheet_h):
+    """Write one sheet's SVG + DXF + PDF, all three from the same placement
+    list -- tiles, frame pieces and corner pieces together, each format's
+    CUT geometry grouped/layered separately from its ENGRAVE geometry."""
     stroke_width = sheet_w * 0.001
+    cut_path_ds, engrave_path_ds = [], []
+    dxf_entities = []
+    cut_polys, engrave_polys = [], []
+    for p in placements:
+        cut_path_ds.append(points_to_svg_path(p["cut_points"], closed=True))
+        engrave_path_ds.extend(points_to_svg_path(r, closed=True) for r in p["engrave_ribbons"])
+        dxf_entities += _dxf_polyline_lines(p["cut_points"], "CUT", 1, closed=True)
+        for r in p["engrave_ribbons"]:
+            dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=True)
+        cut_polys.append(p["cut_points"])
+        engrave_polys.extend(p["engrave_ribbons"])
 
-    written = []
-    for sheet_number, placements in enumerate(packed_sheets, start=1):
-        cut_path_ds, engrave_path_ds = [], []
-        dxf_entities = []
-        for item, px, py in placements:
-            shift_x, shift_y = px - item["min_x"], py - item["min_y"]
-            cut = [(x + shift_x, y + shift_y) for x, y in item["cut_points"]]
-            ribbons = [[(x + shift_x, y + shift_y) for x, y in r] for r in item["engrave_ribbons"]]
+    svg_path = output_dir / f"sheet_{sheet_number:04d}.svg"
+    svg_path.write_text(
+        f'<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{sheet_w}{units}" height="{sheet_h}{units}" '
+        f'viewBox="0 0 {sheet_w} {sheet_h}">\n'
+        f"{svg_groups(cut_path_ds, engrave_path_ds, stroke_width)}\n</svg>\n"
+    )
 
-            cut_path_ds.append(points_to_svg_path(cut, closed=True))
-            engrave_path_ds.extend(points_to_svg_path(r, closed=True) for r in ribbons)
+    dxf_path = output_dir / f"sheet_{sheet_number:04d}.dxf"
+    dxf_path.write_text(_dxf_document(dxf_entities, units))
 
-            dxf_entities += _dxf_polyline_lines(cut, "CUT", 1, closed=True)
-            for r in ribbons:
-                dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=True)
+    pdf_path = output_dir / f"sheet_{sheet_number:04d}.pdf"
+    write_sheet_pdf(pdf_path, sheet_w, sheet_h, units, cut_polys, engrave_polys)
 
-        svg = (
-            f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{sheet_w}{units}" height="{sheet_h}{units}" '
-            f'viewBox="0 0 {sheet_w} {sheet_h}">\n'
-            f"{svg_groups(cut_path_ds, engrave_path_ds, stroke_width)}\n</svg>\n"
-        )
-        svg_path = output_dir / f"frame_sheet_{sheet_number:04d}.svg"
-        svg_path.write_text(svg)
-
-        dxf_path = output_dir / f"frame_sheet_{sheet_number:04d}.dxf"
-        dxf_path.write_text(_dxf_document(dxf_entities, units))
-
-        written.append((svg_path, dxf_path))
-    return written
+    return svg_path, dxf_path, pdf_path
 
 
 # ---------------------------------------------------------------------------
@@ -647,8 +713,6 @@ def generate_batch(params):
         write_tile_dxf(dxf_path, units, cut_outline, engrave_ribbons)
         tile_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
 
-    sheets = build_sheets(output_dir, tiles, size, units, sheet_w, sheet_h, margin)
-
     # Frame and corner pieces border the grid the tiles will be assembled
     # into -- a different concept from how many sheets of material it takes
     # to cut them, hence the separate grid_cols/grid_rows (defaulting to the
@@ -658,6 +722,9 @@ def generate_batch(params):
     grid_rows = int(params.get("grid_rows") or default_rows)
     frame_width = float(params.get("frame_width") or size / 3.0)
     kerf_adjust = float(params.get("kerf_adjust", 0.0))
+
+    validate_piece_fits(size, frame_width, sheet_w, sheet_h, margin, "frame piece")
+    validate_piece_fits(size + frame_width, size + frame_width, sheet_w, sheet_h, margin, "corner piece")
 
     frame_count, corner_count = frame_and_corner_counts(grid_cols, grid_rows)
 
@@ -698,13 +765,23 @@ def generate_batch(params):
         }
         for _ in range(corner_count)
     ]
-    frame_sheets = build_frame_sheets(output_dir, frame_items + corner_items, units, sheet_w, sheet_h, margin)
+
+    # Tiles, frame pieces, and corner pieces are laid out together on each
+    # sheet (frame/corner nested into the leftover space beside and below
+    # the tile grid) and each sheet is written once as SVG + DXF + PDF, all
+    # three combining every piece type instead of splitting tiles from
+    # frame/corner into separate files.
+    combined_sheets = compute_combined_layout(tiles, frame_items, corner_items, size, sheet_w, sheet_h, margin)
+    sheet_files = []
+    for sheet_number, placements in enumerate(combined_sheets, start=1):
+        svg_path, dxf_path, pdf_path = write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, sheet_h)
+        sheet_files.append({"svg": str(svg_path), "dxf": str(dxf_path), "pdf": str(pdf_path)})
 
     return {
         "harmonics": harmonics,
         "tile_count": count,
         "tile_files": tile_files,
-        "sheet_files": [{"svg": str(svg), "dxf": str(dxf)} for svg, dxf in sheets],
+        "sheet_files": sheet_files,
         "grid_cols": grid_cols,
         "grid_rows": grid_rows,
         "frame_width": frame_width,
@@ -712,7 +789,6 @@ def generate_batch(params):
         "corner_count": corner_count,
         "frame_files": frame_files,
         "corner_files": corner_files,
-        "frame_sheet_files": [{"svg": str(svg), "dxf": str(dxf)} for svg, dxf in frame_sheets],
         "output_dir": str(output_dir),
         "sheet_width": sheet_w,
         "sheet_height": sheet_h,
@@ -750,12 +826,11 @@ def main():
     except ValueError as exc:
         raise SystemExit(f"Error: {exc}")
 
-    print(f"Wrote {len(summary['tile_files'])} tile SVG+DXF pairs and "
-          f"{len(summary['sheet_files'])} sheet SVG+DXF pair(s) to {summary['output_dir']}/")
-    print(f"Grid: {summary['grid_cols']}x{summary['grid_rows']} -> "
-          f"{summary['frame_count']} frame + {summary['corner_count']} corner piece(s) "
-          f"({len(summary['frame_sheet_files'])} frame sheet SVG+DXF pair(s)), "
-          f"frame width {summary['frame_width']:g} {args.units}")
+    print(f"Wrote {len(summary['tile_files'])} tile SVG+DXF pairs, "
+          f"{summary['frame_count']} frame + {summary['corner_count']} corner piece SVG+DXF pairs, and "
+          f"{len(summary['sheet_files'])} combined sheet SVG+DXF+PDF set(s) to {summary['output_dir']}/")
+    print(f"Grid: {summary['grid_cols']}x{summary['grid_rows']}, frame width {summary['frame_width']:g} {args.units} "
+          "(frame/corner pieces nested alongside tiles on the same sheet where they fit)")
     print(f"Sheet size: {summary['sheet_width']:g} x {summary['sheet_height']:g} {args.units}")
     print(f"Edge harmonics used (shared by every tile): {summary['harmonics']}")
 
