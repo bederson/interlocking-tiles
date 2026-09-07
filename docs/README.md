@@ -1,6 +1,6 @@
 # Interlocking Tiles
 
-2"x2" wooden tiles for the XTool P3 laser cutter. Every tile uses the exact
+Small vector tiles designed to be manufactured by a laser cutter. Every tile uses the exact
 same edge pattern on all four sides, so any tile mates with any other tile
 in any rotation — Escher-esque, self-interlocking, no straight edges.
 
