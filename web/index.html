@@ -17,20 +17,31 @@
       <span id="exportStatus"></span>
     </div>
 
-    <div class="control">
-      <label for="size">Tile size <span class="value" id="sizeValue"></span></label>
-      <input type="range" id="size" list="sizeTicks">
-      <datalist id="sizeTicks"></datalist>
-    </div>
-
-    <div class="control">
-      <label for="amplitude">Bump / notch depth <span class="value" id="amplitudeValue"></span></label>
-      <input type="range" id="amplitude" list="amplitudeTicks">
-      <datalist id="amplitudeTicks"></datalist>
-    </div>
+    <fieldset>
+      <legend>Tiles</legend>
+      <div class="control">
+        <label for="size">Tile size <span class="value" id="sizeValue"></span></label>
+        <input type="range" id="size" list="sizeTicks">
+        <datalist id="sizeTicks"></datalist>
+      </div>
+      <div class="control">
+        <label for="count"># Tiles <span class="value" id="countValue"></span></label>
+        <input type="range" id="count" min="1" max="36" step="1" value="9" list="countTicks">
+        <datalist id="countTicks">
+          <option value="1"></option><option value="9"></option><option value="18"></option>
+          <option value="27"></option><option value="36"></option>
+        </datalist>
+      </div>
+    </fieldset>
 
     <fieldset>
       <legend>Edge shape</legend>
+      <div class="control">
+        <label for="amplitude">Bump / notch depth <span class="value" id="amplitudeValue"></span></label>
+        <input type="range" id="amplitude" list="amplitudeTicks">
+        <datalist id="amplitudeTicks"></datalist>
+      </div>
+
       <div class="row">
         <label class="radio"><input type="radio" name="edgeMode" value="simple" checked> simple</label>
         <label class="radio"><input type="radio" name="edgeMode" value="random"> random</label>
@@ -71,21 +82,29 @@
         <input type="range" id="engraveWidth" list="engraveWidthTicks">
         <datalist id="engraveWidthTicks"></datalist>
       </div>
+      <div class="control">
+        <label for="curve">Curve <span class="value" id="curveValue"></span></label>
+        <div class="row">
+          <span class="slider-endpoint">Low</span>
+          <input type="range" id="curve" min="0" max="1" step="0.01" value="1">
+          <span class="slider-endpoint">High</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Flourishes</legend>
+      <div class="row">
+        <label class="radio"><input type="checkbox" id="flourishInside"> Inside</label>
+        <label class="radio"><input type="checkbox" id="flourishOutside"> Outside</label>
+      </div>
+      <div class="flourish-grid" id="flourishGrid"></div>
     </fieldset>
 
     <div class="control" hidden>
       <label for="kerf">Kerf fine-tune <span class="value" id="kerfValue"></span></label>
       <input type="range" id="kerf" list="kerfTicks">
       <datalist id="kerfTicks"></datalist>
-    </div>
-
-    <div class="control">
-      <label for="count"># Tiles <span class="value" id="countValue"></span></label>
-      <input type="range" id="count" min="1" max="36" step="1" value="9" list="countTicks">
-      <datalist id="countTicks">
-        <option value="1"></option><option value="9"></option><option value="18"></option>
-        <option value="27"></option><option value="36"></option>
-      </datalist>
     </div>
 
     <fieldset>
@@ -100,18 +119,6 @@
       </div>
       <p class="sheet-status" id="sheetStatus"></p>
     </fieldset>
-
-    <div class="control">
-      <label for="faceSeed">Engrave pattern seed</label>
-      <div class="row">
-        <input type="number" id="faceSeed" value="1" min="0" step="1">
-        <button type="button" id="faceSeedRandomize" title="Randomize">🎲</button>
-      </div>
-    </div>
-
-    <div class="control">
-      <button type="button" id="shuffleBtn">🔀 Shuffle preview arrangement</button>
-    </div>
 
     <fieldset>
       <legend>Units</legend>

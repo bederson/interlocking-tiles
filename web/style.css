@@ -39,6 +39,7 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 
 .controls {
   flex: 0 0 320px;
+  min-width: 0; /* without this, a flex item's content can force it wider than its 320px basis -- see .flourish-grid's comment */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -55,6 +56,7 @@ fieldset {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0; /* <fieldset> has a browser-internal default min-width (historically enforced more strictly in WebKit/Safari) that a plain CSS reset doesn't clear */
 }
 
 legend { color: var(--muted); font-size: 0.85rem; padding: 0 4px; }
@@ -73,6 +75,30 @@ label { font-size: 0.9rem; font-weight: 600; display: flex; justify-content: spa
 
 input[type="range"] { width: 100%; }
 input[type="number"] { width: 90px; padding: 4px 6px; }
+.row input[type="range"] { flex: 1; width: auto; }
+.slider-endpoint { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+
+/* min-width/min-height: 0 overrides the default "min-width: auto" that
+   grid items otherwise get, which lets a <button>'s content set an
+   effective minimum size grid track sizing can't shrink below --
+   WebKit/Safari computes that minimum larger than Chromium does for these
+   buttons, so without this override the grid overflows its panel in the
+   native app (WKWebView) while looking fine in Chrome-based testing. */
+.flourish-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; min-width: 0; }
+.flourish-item {
+  aspect-ratio: 1 / 1;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.flourish-item svg { width: 100%; height: 100%; overflow: visible; }
+.flourish-item.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.flourish-emoji { font-size: 1.1rem; }
 
 button {
   cursor: pointer;

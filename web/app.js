@@ -49,16 +49,103 @@ function arcPoints(center, radius, a0deg, a1deg, n) {
   return pts;
 }
 
+// Like arcPoints, but the "Curve" slider blends the quarter-circle arc
+// (curveAmount=1) toward a sharp 90-degree elbow through the tile corner
+// opposite `center` (curveAmount=0) -- see generate_tiles.py's
+// _corner_curve_points for the superellipse math this mirrors exactly.
+function cornerCurvePoints(center, radius, a0deg, a1deg, curveAmount, n) {
+  const a0 = (a0deg * Math.PI) / 180, a1 = (a1deg * Math.PI) / 180;
+  const axisU = [Math.cos(a0), Math.sin(a0)];
+  const axisV = [Math.cos(a1), Math.sin(a1)];
+  const p0 = [center[0] + radius * axisU[0], center[1] + radius * axisU[1]];
+  const p1 = [center[0] + radius * axisV[0], center[1] + radius * axisV[1]];
+  if (curveAmount <= 1e-6) {
+    const elbow = [center[0] + radius * (axisU[0] + axisV[0]), center[1] + radius * (axisU[1] + axisV[1])];
+    const half = Math.floor(n / 2);
+    const pts = [];
+    for (let i = 0; i <= half; i++) {
+      pts.push([p0[0] + (elbow[0] - p0[0]) * (i / half), p0[1] + (elbow[1] - p0[1]) * (i / half)]);
+    }
+    for (let i = 1; i <= n - half; i++) {
+      pts.push([elbow[0] + (p1[0] - elbow[0]) * (i / (n - half)), elbow[1] + (p1[1] - elbow[1]) * (i / (n - half))]);
+    }
+    return pts;
+  }
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const theta = (Math.PI / 2) * (i / n);
+    const u = radius * Math.cos(theta) ** curveAmount;
+    const v = radius * Math.sin(theta) ** curveAmount;
+    pts.push([center[0] + u * axisU[0] + v * axisV[0], center[1] + u * axisU[1] + v * axisV[1]]);
+  }
+  return pts;
+}
+
 const MOTIFS = ["A", "B", "S"];
 
-function truchetFacePaths(size, motif, n = 24) {
+
+// Flourishes: an optional decorative interruption inserted into the
+// "inside" (smallest-radius) and/or "outside" (largest-radius) curve of a
+// motif's N parallel engrave lines -- see generate_tiles.py's matching
+// comment. FLOURISHES must stay byte-for-byte identical to the Python
+// FLOURISHES constant (same JSON literal in both, by construction).
+const FLOURISH_NONE = "none";
+const FLOURISH_RANDOM = "random";
+const FLOURISH_GAP_FRACTION = 0.3;
+
+const FLOURISHES = [{"name": "step-up", "points": [[0, 0], [0.28, 0], [0.28, 0.32], [0.72, 0.32], [0.72, 0], [1, 0]]}, {"name": "step-deep", "points": [[0, 0], [0.22, 0], [0.22, 0.48], [0.78, 0.48], [0.78, 0], [1, 0]]}, {"name": "greek-single-spiral", "points": [[0.0, 0.0], [0.12, 0.0], [0.12, 0.4], [0.55, 0.4], [0.55, 0.15], [0.28, 0.15], [0.28, 0.28], [0.28, 0.28], [1.0, 0.0]]}, {"name": "key-zigzag", "points": [[0, 0], [0.15, 0], [0.15, 0.3], [0.4, 0.3], [0.4, 0], [0.6, 0], [0.6, 0.3], [0.85, 0.3], [0.85, 0], [1, 0]]}, {"name": "greek-single-spiral-deep", "points": [[0.0, 0.0], [0.1, 0.0], [0.1, 0.42], [0.58, 0.42], [0.58, 0.14], [0.24, 0.14], [0.24, 0.32], [0.44, 0.32], [0.44, 0.22], [0.34, 0.22], [0.34, 0.22], [1.0, 0.0]]}, {"name": "greek-double-spiral", "points": [[0.0, 0.0], [0.1, 0.0], [0.1, 0.35], [0.4, 0.35], [0.4, 0.15], [0.22, 0.15], [0.22, 0.26], [0.78, 0.26], [0.78, 0.15], [0.6, 0.15], [0.6, 0.35], [0.9, 0.35], [0.9, 0.0], [1.0, 0.0]]}, {"name": "greek-double-spiral-tall", "points": [[0.0, 0.0], [0.08, 0.0], [0.08, 0.45], [0.35, 0.45], [0.35, 0.2], [0.18, 0.2], [0.18, 0.32], [0.82, 0.32], [0.82, 0.2], [0.65, 0.2], [0.65, 0.45], [0.92, 0.45], [0.92, 0.0], [1.0, 0.0]]}, {"name": "greek-double-spiral-cw", "points": [[0.0, -0.0], [0.1, -0.0], [0.1, -0.35], [0.4, -0.35], [0.4, -0.15], [0.22, -0.15], [0.22, -0.26], [0.78, -0.26], [0.78, -0.15], [0.6, -0.15], [0.6, -0.35], [0.9, -0.35], [0.9, -0.0], [1.0, -0.0]]}, {"name": "greek-nested-key", "points": [[0.0, 0.0], [0.14, 0.0], [0.14, 0.38], [0.5, 0.38], [0.5, 0.16], [0.28, 0.16], [0.28, 0.27], [0.38, 0.27], [0.38, 0.27], [1.0, 0.0]]}, {"name": "greek-fret-3", "points": [[0.0, 0.0], [0.0, 0.32], [0.1667, 0.32], [0.1667, 0.0], [0.3333, 0.0], [0.3333, 0.32], [0.5, 0.32], [0.5, 0.0], [0.6667, 0.0], [0.6667, 0.32], [0.8333, 0.32], [0.8333, 0.0], [1.0, 0.0]]}, {"name": "greek-fret-4", "points": [[0.0, 0.0], [0.0, 0.28], [0.125, 0.28], [0.125, 0.0], [0.25, 0.0], [0.25, 0.28], [0.375, 0.28], [0.375, 0.0], [0.5, 0.0], [0.5, 0.28], [0.625, 0.28], [0.625, 0.0], [0.75, 0.0], [0.75, 0.28], [0.875, 0.28], [0.875, 0.0], [1.0, 0.0]]}, {"name": "greek-fret-tall", "points": [[0.0, 0.0], [0.0, 0.46], [0.1667, 0.46], [0.1667, 0.0], [0.3333, 0.0], [0.3333, 0.46], [0.5, 0.46], [0.5, 0.0], [0.6667, 0.0], [0.6667, 0.46], [0.8333, 0.46], [0.8333, 0.0], [1.0, 0.0]]}, {"name": "greek-interlock", "points": [[0.0, 0.0], [0.14, 0.0], [0.14, 0.34], [0.36, 0.34], [0.36, 0.119], [0.22, 0.119], [0.22, 0.221], [0.5, 0.221], [0.5, 0.0], [0.64, 0.0], [0.64, 0.34], [0.86, 0.34], [0.86, 0.119], [0.72, 0.119], [0.72, 0.221], [1.0, 0.221], [1.0, 0.0]]}, {"name": "greek-interlock-down", "points": [[0.0, -0.0], [0.14, -0.0], [0.14, -0.34], [0.36, -0.34], [0.36, -0.119], [0.22, -0.119], [0.22, -0.221], [0.5, -0.221], [0.5, -0.0], [0.64, -0.0], [0.64, -0.34], [0.86, -0.34], [0.86, -0.119], [0.72, -0.119], [0.72, -0.221], [1.0, -0.221], [1.0, -0.0]]}, {"name": "greek-cross-key", "points": [[0.0, 0.0], [0.2, 0.0], [0.2, 0.3], [0.42, 0.3], [0.42, 0.12], [0.5, 0.12], [0.5, 0.3], [0.5, 0.12], [0.58, 0.12], [0.58, 0.3], [0.8, 0.3], [0.8, 0.0], [1.0, 0.0]]}, {"name": "greek-block-key", "points": [[0.0, 0.0], [0.25, 0.0], [0.25, 0.4], [0.5, 0.4], [0.5, 0.12], [0.75, 0.12], [0.75, 0.4], [1.0, 0.4], [1.0, 0.0]]}, {"name": "spiral-cw", "points": [[0, 0], [0.3, 0], [0.7, 0.0], [0.6857, 0.0603], [0.6542, 0.112], [0.6092, 0.1503], [0.556, 0.1722], [0.5, 0.1764], [0.447, 0.1633], [0.4019, 0.1351], [0.3688, 0.0954], [0.3502, 0.0487], [0.3472, 0.0], [0.3592, -0.0458], [0.384, -0.0842], [0.4185, -0.1121], [0.4586, -0.1273], [0.5, -0.1292], [0.5385, -0.1184], [0.5704, -0.0969], [0.593, -0.0676], [0.6049, -0.0341], [0.6056, -0.0], [0.5959, 0.0312], [0.5778, 0.0565], [0.5537, 0.0739], [0.5268, 0.0824], [0.5, 0.0819], [0.4761, 0.0734], [0.4574, 0.0587], [0.4452, 0.0398], [0.44, 0.0195], [0.4417, 0.0], [0.449, -0.0166], [0.4604, -0.0287], [0.474, -0.0357], [0.4878, -0.0375], [0.5, -0.0347], [0.5093, -0.0285], [0.7, 0], [1, 0]]}, {"name": "greek-wave-scroll", "points": [[0.0, 0.0], [0.18, 0.0], [0.74, 0.0], [0.7144, 0.0873], [0.6596, 0.1558], [0.5857, 0.1967], [0.505, 0.206], [0.43, 0.1847], [0.3713, 0.1384], [0.3363, 0.0761], [0.3281, 0.0083], [0.3457, -0.0543], [0.3839, -0.1028], [0.435, -0.1314], [0.49, -0.1377], [0.54, -0.1233], [0.5781, -0.0926], [0.5997, -0.0523], [0.6036, -0.01], [0.5916, 0.0273], [0.5679, 0.0546], [0.5382, 0.0687], [0.5085, 0.0696], [0.4838, 0.0595], [0.4677, 0.0422], [0.4615, 0.0226], [0.4642, 0.0052], [0.4731, -0.0066], [0.4845, -0.0113], [0.4845, -0.0113], [0.82, 0.0], [1.0, 0.0]]}, {"name": "spiral-loose", "points": [[0, 0], [0.22, 0], [0.78, 0.0], [0.7582, 0.0839], [0.7128, 0.1546], [0.6496, 0.2059], [0.576, 0.234], [0.5, 0.2375], [0.4292, 0.2178], [0.3704, 0.1784], [0.3285, 0.1246], [0.3065, 0.0629], [0.305, 0.0], [0.3226, -0.0576], [0.356, -0.1046], [0.4004, -0.1371], [0.4502, -0.1531], [0.5, -0.1525], [0.5445, -0.137], [0.5796, -0.1096], [0.6027, -0.0746], [0.6127, -0.0366], [0.61, -0.0], [0.5965, 0.0314], [0.5752, 0.0547], [0.5497, 0.0684], [0.5235, 0.0723], [0.5, 0.0675], [0.4818, 0.0561], [0.4703, 0.0409], [0.466, 0.0247], [0.78, 0], [1, 0]]}, {"name": "swash-s", "points": [[0, 0], [0, 0], [0.15, 0.0], [0.1792, 0.0392], [0.2083, 0.0776], [0.2375, 0.1148], [0.2667, 0.15], [0.2958, 0.1826], [0.325, 0.2121], [0.3542, 0.238], [0.3833, 0.2598], [0.4125, 0.2772], [0.4417, 0.2898], [0.4708, 0.2974], [0.5, 0.3], [0.5292, 0.2974], [0.5583, 0.2898], [0.5875, 0.2772], [0.6167, 0.2598], [0.6458, 0.238], [0.675, 0.2121], [0.7042, 0.1826], [0.7333, 0.15], [0.7625, 0.1148], [0.7917, 0.0776], [0.8208, 0.0392], [0.85, 0.0], [0.85, 0], [1, 0]]}, {"name": "swash-big-s", "points": [[0.0, 0.0], [0.0417, 0.0548], [0.0833, 0.1087], [0.125, 0.1607], [0.1667, 0.21], [0.2083, 0.2557], [0.25, 0.297], [0.2917, 0.3332], [0.3333, 0.3637], [0.375, 0.388], [0.4167, 0.4057], [0.4583, 0.4164], [0.5, 0.42], [0.5417, 0.4164], [0.5833, 0.4057], [0.625, 0.388], [0.6667, 0.3637], [0.7083, 0.3332], [0.75, 0.297], [0.7917, 0.2557], [0.8333, 0.21], [0.875, 0.1607], [0.9167, 0.1087], [0.9583, 0.0548], [1.0, 0.0]]}, {"name": "greek-wave-scroll-mirror", "points": [[0.0, 0.0], [0.18, 0.0], [0.74, 0.0], [0.7144, -0.0873], [0.6596, -0.1558], [0.5857, -0.1967], [0.505, -0.206], [0.43, -0.1847], [0.3713, -0.1384], [0.3363, -0.0761], [0.3281, -0.0083], [0.3457, 0.0543], [0.3839, 0.1028], [0.435, 0.1314], [0.49, 0.1377], [0.54, 0.1233], [0.5781, 0.0926], [0.5997, 0.0523], [0.6036, 0.01], [0.5916, -0.0273], [0.5679, -0.0546], [0.5382, -0.0687], [0.5085, -0.0696], [0.4838, -0.0595], [0.4677, -0.0422], [0.4615, -0.0226], [0.4642, -0.0052], [0.4731, 0.0066], [0.4845, 0.0113], [0.4845, 0.0113], [0.82, 0.0], [1.0, 0.0]]}, {"name": "swash-tight-s", "points": [[0.1, 0.0], [0.1333, 0.0235], [0.1667, 0.0466], [0.2, 0.0689], [0.2333, 0.09], [0.2667, 0.1096], [0.3, 0.1273], [0.3333, 0.1428], [0.3667, 0.1559], [0.4, 0.1663], [0.4333, 0.1739], [0.4667, 0.1785], [0.5, 0.18], [0.5333, 0.1785], [0.5667, 0.1739], [0.6, 0.1663], [0.6333, 0.1559], [0.6667, 0.1428], [0.7, 0.1273], [0.7333, 0.1096], [0.7667, 0.09], [0.8, 0.0689], [0.8333, 0.0466], [0.8667, 0.0235], [0.9, 0.0]]}];
+
+function flourishCanonicalPoints(flourishChoice, rng) {
+  if (flourishChoice === FLOURISH_RANDOM) {
+    return FLOURISHES[Math.floor(rng() * FLOURISHES.length)].points;
+  }
+  const found = FLOURISHES.find((f) => f.name === flourishChoice);
+  if (found) return found.points;
+  return [[0, 0], [1, 0]]; // FLOURISH_NONE (or an unrecognized id): a straight connector
+}
+
+// Auto-rotate a canonical flourish 180 degrees about its own chord
+// midpoint if its natural lean doesn't already match the side it's being
+// inserted into -- see generate_tiles.py's _oriented_flourish_points.
+function orientedFlourishPoints(points, wantPositiveV) {
+  const isPositive = points.reduce((sum, [, v]) => sum + v, 0) >= 0;
+  if (isPositive === wantPositiveV) return points;
+  return points.slice().reverse().map(([u, v]) => [1 - u, -v]);
+}
+
+function applyFlourishGap(points, canonicalPoints) {
+  const n = points.length;
+  if (n < 4) return points;
+  const mid = (n - 1) / 2;
+  const halfGap = Math.max(1, ((n - 1) * FLOURISH_GAP_FRACTION) / 2);
+  const iEntry = Math.max(0, Math.floor(mid - halfGap));
+  const iExit = Math.min(n - 1, Math.ceil(mid + halfGap));
+  const entry = points[iEntry], exitPt = points[iExit];
+  const dx = exitPt[0] - entry[0], dy = exitPt[1] - entry[1];
+  const chord = Math.hypot(dx, dy);
+  if (chord < 1e-9) return points;
+  const cosA = dx / chord, sinA = dy / chord;
+  const flourishPts = canonicalPoints.map(([u, v]) => [
+    entry[0] + u * chord * cosA - v * chord * sinA,
+    entry[1] + u * chord * sinA + v * chord * cosA,
+  ]);
+  return points.slice(0, iEntry).concat(flourishPts, points.slice(iExit + 1));
+}
+
+function truchetFacePaths(size, motif, n = 24, curveAmount = 1.0) {
   const r = size / 2;
   const mid = size / 2;
   if (motif === "A") {
-    return [arcPoints([0, 0], r, 0, 90, n), arcPoints([size, size], r, 180, 270, n)];
+    return [
+      cornerCurvePoints([0, 0], r, 0, 90, curveAmount, n),
+      cornerCurvePoints([size, size], r, 180, 270, curveAmount, n),
+    ];
   }
   if (motif === "B") {
-    return [arcPoints([size, 0], r, 90, 180, n), arcPoints([0, size], r, 270, 360, n)];
+    return [
+      cornerCurvePoints([size, 0], r, 90, 180, curveAmount, n),
+      cornerCurvePoints([0, size], r, 270, 360, curveAmount, n),
+    ];
   }
   return [
     [[mid, 0], [mid, size]],
@@ -337,6 +424,7 @@ function updateReadouts() {
   el("columnsValue").textContent = el("columns").value;
   el("wigglesValue").textContent = el("wiggles").value;
   el("countValue").textContent = el("count").value;
+  el("curveValue").textContent = `${Math.round(parseFloat(el("curve").value) * 100)}%`;
 }
 
 function frameAndCornerCounts(gridCols, gridRows) {
@@ -434,6 +522,9 @@ function redraw() {
   const kerf = parseFloat(el("kerf").value);
   const engraveWidth = parseFloat(el("engraveWidth").value);
   const engraveLinesN = parseInt(el("engraveLines").value, 10);
+  const curveAmount = parseFloat(el("curve").value);
+  const flourishInside = el("flourishInside").checked;
+  const flourishOutside = el("flourishOutside").checked;
   const harmonics = currentHarmonics();
   const samples = 60;
 
@@ -491,9 +582,16 @@ function redraw() {
     const col = i % gridCols;
     const angle = rotations[Math.floor(rotRng() * rotations.length)];
     const motif = MOTIFS[Math.floor(motifRng() * MOTIFS.length)];
-    const engraveLines = truchetFacePaths(size, motif).flatMap((arc) =>
-      parallelLines(extendPolylineEnds(arc, overshoot), engraveWidth, engraveLinesN)
-    );
+    const flourishPts = flourishCanonicalPoints(selectedFlourish, motifRng);
+    const engraveLines = truchetFacePaths(size, motif, 24, curveAmount).flatMap((arc) => {
+      const lines = parallelLines(extendPolylineEnds(arc, overshoot), engraveWidth, engraveLinesN);
+      if (motif !== "S" && (flourishInside || flourishOutside)) {
+        if (flourishInside) lines[0] = applyFlourishGap(lines[0], orientedFlourishPoints(flourishPts, true));
+        if (flourishOutside && lines.length > 1) lines[lines.length - 1] = applyFlourishGap(lines[lines.length - 1], orientedFlourishPoints(flourishPts, false));
+        else if (flourishOutside && lines.length === 1 && !flourishInside) lines[0] = applyFlourishGap(lines[0], orientedFlourishPoints(flourishPts, false));
+      }
+      return lines;
+    });
     drawPiece(outline, engraveLines, `translate(${col * size},${row * size}) rotate(${angle},${size / 2},${size / 2})`);
   }
 
@@ -571,8 +669,11 @@ async function doExport() {
     kerf_adjust: parseFloat(el("kerf").value),
     engrave_width: parseFloat(el("engraveWidth").value),
     engrave_lines: parseInt(el("engraveLines").value, 10),
+    curve: parseFloat(el("curve").value),
+    flourish: selectedFlourish,
+    flourish_inside: el("flourishInside").checked,
+    flourish_outside: el("flourishOutside").checked,
     count: parseInt(el("count").value, 10),
-    face_seed: parseInt(el("faceSeed").value, 10),
     columns: parseInt(el("columns").value, 10),
   };
   try {
@@ -595,12 +696,15 @@ async function doExport() {
 const STORAGE_KEY = "tileConsole.controls";
 const PERSISTED_FIELD_IDS = [
   "size", "amplitude", "wiggles", "edgeSeed", "kerf", "engraveWidth", "engraveLines",
-  "count", "faceSeed", "columns",
+  "count", "columns", "curve", "flourishInside", "flourishOutside",
 ];
 
 function currentControlState() {
-  const state = { units, edgeMode: currentEdgeMode() };
-  for (const id of PERSISTED_FIELD_IDS) state[id] = el(id).value;
+  const state = { units, edgeMode: currentEdgeMode(), flourish: selectedFlourish };
+  for (const id of PERSISTED_FIELD_IDS) {
+    const node = el(id);
+    state[id] = node.type === "checkbox" ? node.checked : node.value;
+  }
   return state;
 }
 
@@ -631,7 +735,58 @@ function applyControlState(state) {
     el("edgeSeedControl").hidden = !isRandom;
   }
   for (const id of PERSISTED_FIELD_IDS) {
-    if (state[id] !== undefined && state[id] !== null && state[id] !== "") el(id).value = state[id];
+    if (state[id] === undefined || state[id] === null) continue;
+    const node = el(id);
+    if (node.type === "checkbox") node.checked = !!state[id];
+    else if (state[id] !== "") node.value = state[id];
+  }
+  if (state.flourish) setSelectedFlourish(state.flourish, false);
+}
+
+// ---------------------------------------------------------------------------
+// Flourish picker grid: "None" + "Random" + one thumbnail per FLOURISHES
+// entry, click to select. selectedFlourish drives redraw()/doExport() the
+// same way any other control value would, it's just not a native <input>.
+// ---------------------------------------------------------------------------
+
+let selectedFlourish = FLOURISH_NONE;
+
+function buildFlourishGrid() {
+  const grid = el("flourishGrid");
+  grid.innerHTML = "";
+  const items = [
+    { id: FLOURISH_NONE, label: "None", points: [[0, 0], [1, 0]] },
+    { id: FLOURISH_RANDOM, label: "Random", points: null },
+    ...FLOURISHES.map((f) => ({ id: f.name, label: f.name, points: f.points })),
+  ];
+  for (const item of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "flourish-item";
+    btn.dataset.flourish = item.id;
+    btn.title = item.label;
+    if (item.points) {
+      const xs = item.points.map((p) => p[0]), ys = item.points.map((p) => p[1]);
+      const minX = Math.min(0, ...xs) - 0.15, maxX = Math.max(1, ...xs) + 0.15;
+      const minY = Math.min(0, ...ys) - 0.15, maxY = Math.max(0, ...ys) + 0.15;
+      const d = item.points.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${-p[1]}`).join(" ");
+      btn.innerHTML = `<svg viewBox="${minX} ${-maxY} ${maxX - minX} ${maxY - minY}"><path d="${d}" fill="none" stroke="currentColor" stroke-width="0.06" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    } else {
+      btn.innerHTML = `<span class="flourish-emoji">🎲</span>`;
+    }
+    btn.addEventListener("click", () => setSelectedFlourish(item.id, true));
+    grid.appendChild(btn);
+  }
+}
+
+function setSelectedFlourish(id, shouldRedraw) {
+  selectedFlourish = id;
+  el("flourishGrid").querySelectorAll(".flourish-item").forEach((b) => {
+    b.classList.toggle("selected", b.dataset.flourish === id);
+  });
+  if (shouldRedraw) {
+    redraw();
+    saveControlState();
   }
 }
 
@@ -653,22 +808,15 @@ function wireEvents() {
     })
   );
 
-  ["size", "amplitude", "wiggles", "kerf", "engraveWidth", "engraveLines", "count"].forEach((id) => el(id).addEventListener("input", redraw));
+  ["size", "amplitude", "wiggles", "kerf", "engraveWidth", "engraveLines", "count", "curve"].forEach((id) => el(id).addEventListener("input", redraw));
   el("edgeSeed").addEventListener("input", redraw);
   el("columns").addEventListener("input", updateSheetStatus);
+  ["flourishInside", "flourishOutside"].forEach((id) => el(id).addEventListener("change", redraw));
 
   el("edgeSeedRandomize").addEventListener("click", () => {
     el("edgeSeed").value = Math.floor(Math.random() * 100000);
     redraw();
     saveControlState();
-  });
-  el("faceSeedRandomize").addEventListener("click", () => {
-    el("faceSeed").value = Math.floor(Math.random() * 100000);
-    saveControlState();
-  });
-  el("shuffleBtn").addEventListener("click", () => {
-    previewSeed = Math.floor(Math.random() * 100000);
-    redraw();
   });
 
   el("exportBtn").addEventListener("click", doExport);
@@ -682,6 +830,7 @@ if (savedControlState && savedControlState.units) units = savedControlState.unit
 document.querySelector(`input[name="units"][value="${units}"]`).checked = true;
 
 applyUnitConfig();
+buildFlourishGrid();
 applyControlState(savedControlState);
 wireEvents();
 redraw();

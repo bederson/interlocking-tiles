@@ -25,6 +25,29 @@ strokes, evenly spaced across `--engrave-width` (default 0.5in / 12.7mm) —
 N distinct scored lines spanning that channel, rather than one solid filled
 band.
 
+The two curved motifs' corner-rounding is controlled by `--curve` (0-1,
+default 1): 1 is today's full quarter-circle arc, 0 collapses it to a sharp
+90-degree elbow through the tile center instead, and anything in between is
+a smoothly rounded corner (a superellipse blend of the two). The straight
+pass-through motif has no corner to round, so it's unaffected.
+
+**Flourishes** optionally interrupt one (or two) of the N parallel lines on
+each curved motif with a decorative detour, while the line stays one
+continuous path: `--flourish-inside` and/or `--flourish-outside` pick
+whether the innermost (smallest-radius) and/or outermost (largest-radius)
+of the N lines gets a gap bridged by a flourish shape (the untouched
+middle lines, if any, still follow the plain curve) — the straight
+pass-through motif has no inside/outside to distinguish, so it's never
+flourished. `--flourish` selects which shape fills every such gap: a
+built-in flourish name (see the web console's 5x5 picker grid — 23 shapes
+plus "none" and "random" — for the full set: steps, Greek-key meanders,
+loops, figure-eights, spirals, and S-swashes), `random` for a different
+one per tile (seeded by `--face-seed`), or `none` (default) for a plain
+straight connector across the gap. Each flourish is stored in a canonical
+orientation and automatically rotated 180 degrees as needed so it always
+bulges away from the rest of the N-line bundle it's inserted next to,
+rather than crossing into it.
+
 Each engrave path is also deliberately extended a bit past the tile's
 idealized flat edge, since the real (wiggly) cut edge bows outward past
 that flat line on one side of every crossing. Any overshoot past the tile's
@@ -180,6 +203,11 @@ Key options:
   0.5in / 12.7mm).
 - `--engrave-lines` — number of parallel lines spanning that channel width
   (default 3).
+- `--curve` — 0 (sharp 90-degree corners) to 1 (full quarter-circle arcs,
+  default), for the two curved engrave motifs.
+- `--flourish` / `--flourish-inside` / `--flourish-outside` — insert a
+  decorative flourish shape into the inside and/or outside curve of each
+  curved motif; see "How it works" above.
 - `--columns` — how many tiles wide the cutting sheet is (default: roughly
   square). That establishes a fixed material width; tiles, then frame
   pieces, then corner pieces flow left to right within it, wrapping to a
@@ -200,3 +228,9 @@ Key options:
 See [p3_guide.md](p3_guide.md) for material choice, starting
 settings, safety, and the recommended order of operations (always test-cut
 a small coupon before committing to a full batch).
+
+# Copyright
+Ben Bederson
+September 2026
+https://www.cs.umd.edu/~bederson/
+https://github.com/bederson

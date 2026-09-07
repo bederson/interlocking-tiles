@@ -95,31 +95,146 @@ def _arc_points(center, radius, angle_start_deg, angle_end_deg, n_samples):
     return pts
 
 
+def _corner_curve_points(center, radius, angle_start_deg, angle_end_deg, curve_amount, n_samples):
+    """Like _arc_points, but the "Curve" slider blends the quarter-circle
+    arc (curve_amount=1) toward a sharp 90-degree elbow through the tile
+    corner opposite `center` (curve_amount=0), with every value in between
+    a smoothly-rounded corner -- a superellipse (u/r)^n + (v/r)^n = 1 in
+    the local frame spanned by the two radii to the arc's endpoints, where
+    n=2 is the true circle and n->infinity approaches the elbow. Since
+    2/n == curve_amount, the parametric point is just
+    u = r*cos(theta)^curve_amount, v = r*sin(theta)^curve_amount -- except
+    at curve_amount==0 exactly, where that formula degenerates (0**0==1
+    collapses every sample to the elbow corner), so the elbow is instead
+    built directly as two straight segments.
+    """
+    a0 = math.radians(angle_start_deg)
+    a1 = math.radians(angle_end_deg)
+    axis_u = (math.cos(a0), math.sin(a0))
+    axis_v = (math.cos(a1), math.sin(a1))
+    p0 = (center[0] + radius * axis_u[0], center[1] + radius * axis_u[1])
+    p1 = (center[0] + radius * axis_v[0], center[1] + radius * axis_v[1])
+    if curve_amount <= 1e-6:
+        elbow = (center[0] + radius * (axis_u[0] + axis_v[0]), center[1] + radius * (axis_u[1] + axis_v[1]))
+        half = n_samples // 2
+        pts = [
+            (p0[0] + (elbow[0] - p0[0]) * i / half, p0[1] + (elbow[1] - p0[1]) * i / half)
+            for i in range(half + 1)
+        ]
+        pts += [
+            (elbow[0] + (p1[0] - elbow[0]) * i / (n_samples - half), elbow[1] + (p1[1] - elbow[1]) * i / (n_samples - half))
+            for i in range(1, n_samples - half + 1)
+        ]
+        return pts
+    pts = []
+    for i in range(n_samples + 1):
+        theta = (math.pi / 2.0) * (i / n_samples)
+        u = radius * math.cos(theta) ** curve_amount
+        v = radius * math.sin(theta) ** curve_amount
+        pts.append((center[0] + u * axis_u[0] + v * axis_v[0], center[1] + u * axis_u[1] + v * axis_v[1]))
+    return pts
+
+
 MOTIFS = ("A", "B", "S")
 
 
-def truchet_face_paths(size, motif, n_samples=32):
+# ---------------------------------------------------------------------------
+# Flourishes: an optional decorative interruption inserted into the
+# "inside" (smallest-radius) and/or "outside" (largest-radius) curve of a
+# motif's N parallel engrave lines -- the other N-2 lines keep following
+# the plain curve untouched. Each flourish is stored once, in a canonical
+# frame where it runs from an entry point (0,0) to an exit point (1,0);
+# apply_flourish_gap() then scales/rotates/translates it to bridge whatever
+# gap it's cutting into a real line, so the line stays one continuous path
+# (pre-gap curve -> flourish -> post-gap curve) instead of two disconnected
+# pieces. Only meaningful on curved (A/B) motifs -- a straight pass-through
+# has no "inside"/"outside" to distinguish, so it's left alone.
+FLOURISH_NONE = "none"
+FLOURISH_RANDOM = "random"
+FLOURISH_GAP_FRACTION = 0.3  # fraction of the line's sample span the gap replaces
+
+FLOURISHES = [{"name": "step-up", "points": [[0, 0], [0.28, 0], [0.28, 0.32], [0.72, 0.32], [0.72, 0], [1, 0]]}, {"name": "step-deep", "points": [[0, 0], [0.22, 0], [0.22, 0.48], [0.78, 0.48], [0.78, 0], [1, 0]]}, {"name": "greek-single-spiral", "points": [[0.0, 0.0], [0.12, 0.0], [0.12, 0.4], [0.55, 0.4], [0.55, 0.15], [0.28, 0.15], [0.28, 0.28], [0.28, 0.28], [1.0, 0.0]]}, {"name": "key-zigzag", "points": [[0, 0], [0.15, 0], [0.15, 0.3], [0.4, 0.3], [0.4, 0], [0.6, 0], [0.6, 0.3], [0.85, 0.3], [0.85, 0], [1, 0]]}, {"name": "greek-single-spiral-deep", "points": [[0.0, 0.0], [0.1, 0.0], [0.1, 0.42], [0.58, 0.42], [0.58, 0.14], [0.24, 0.14], [0.24, 0.32], [0.44, 0.32], [0.44, 0.22], [0.34, 0.22], [0.34, 0.22], [1.0, 0.0]]}, {"name": "greek-double-spiral", "points": [[0.0, 0.0], [0.1, 0.0], [0.1, 0.35], [0.4, 0.35], [0.4, 0.15], [0.22, 0.15], [0.22, 0.26], [0.78, 0.26], [0.78, 0.15], [0.6, 0.15], [0.6, 0.35], [0.9, 0.35], [0.9, 0.0], [1.0, 0.0]]}, {"name": "greek-double-spiral-tall", "points": [[0.0, 0.0], [0.08, 0.0], [0.08, 0.45], [0.35, 0.45], [0.35, 0.2], [0.18, 0.2], [0.18, 0.32], [0.82, 0.32], [0.82, 0.2], [0.65, 0.2], [0.65, 0.45], [0.92, 0.45], [0.92, 0.0], [1.0, 0.0]]}, {"name": "greek-double-spiral-cw", "points": [[0.0, -0.0], [0.1, -0.0], [0.1, -0.35], [0.4, -0.35], [0.4, -0.15], [0.22, -0.15], [0.22, -0.26], [0.78, -0.26], [0.78, -0.15], [0.6, -0.15], [0.6, -0.35], [0.9, -0.35], [0.9, -0.0], [1.0, -0.0]]}, {"name": "greek-nested-key", "points": [[0.0, 0.0], [0.14, 0.0], [0.14, 0.38], [0.5, 0.38], [0.5, 0.16], [0.28, 0.16], [0.28, 0.27], [0.38, 0.27], [0.38, 0.27], [1.0, 0.0]]}, {"name": "greek-fret-3", "points": [[0.0, 0.0], [0.0, 0.32], [0.1667, 0.32], [0.1667, 0.0], [0.3333, 0.0], [0.3333, 0.32], [0.5, 0.32], [0.5, 0.0], [0.6667, 0.0], [0.6667, 0.32], [0.8333, 0.32], [0.8333, 0.0], [1.0, 0.0]]}, {"name": "greek-fret-4", "points": [[0.0, 0.0], [0.0, 0.28], [0.125, 0.28], [0.125, 0.0], [0.25, 0.0], [0.25, 0.28], [0.375, 0.28], [0.375, 0.0], [0.5, 0.0], [0.5, 0.28], [0.625, 0.28], [0.625, 0.0], [0.75, 0.0], [0.75, 0.28], [0.875, 0.28], [0.875, 0.0], [1.0, 0.0]]}, {"name": "greek-fret-tall", "points": [[0.0, 0.0], [0.0, 0.46], [0.1667, 0.46], [0.1667, 0.0], [0.3333, 0.0], [0.3333, 0.46], [0.5, 0.46], [0.5, 0.0], [0.6667, 0.0], [0.6667, 0.46], [0.8333, 0.46], [0.8333, 0.0], [1.0, 0.0]]}, {"name": "greek-interlock", "points": [[0.0, 0.0], [0.14, 0.0], [0.14, 0.34], [0.36, 0.34], [0.36, 0.119], [0.22, 0.119], [0.22, 0.221], [0.5, 0.221], [0.5, 0.0], [0.64, 0.0], [0.64, 0.34], [0.86, 0.34], [0.86, 0.119], [0.72, 0.119], [0.72, 0.221], [1.0, 0.221], [1.0, 0.0]]}, {"name": "greek-interlock-down", "points": [[0.0, -0.0], [0.14, -0.0], [0.14, -0.34], [0.36, -0.34], [0.36, -0.119], [0.22, -0.119], [0.22, -0.221], [0.5, -0.221], [0.5, -0.0], [0.64, -0.0], [0.64, -0.34], [0.86, -0.34], [0.86, -0.119], [0.72, -0.119], [0.72, -0.221], [1.0, -0.221], [1.0, -0.0]]}, {"name": "greek-cross-key", "points": [[0.0, 0.0], [0.2, 0.0], [0.2, 0.3], [0.42, 0.3], [0.42, 0.12], [0.5, 0.12], [0.5, 0.3], [0.5, 0.12], [0.58, 0.12], [0.58, 0.3], [0.8, 0.3], [0.8, 0.0], [1.0, 0.0]]}, {"name": "greek-block-key", "points": [[0.0, 0.0], [0.25, 0.0], [0.25, 0.4], [0.5, 0.4], [0.5, 0.12], [0.75, 0.12], [0.75, 0.4], [1.0, 0.4], [1.0, 0.0]]}, {"name": "spiral-cw", "points": [[0, 0], [0.3, 0], [0.7, 0.0], [0.6857, 0.0603], [0.6542, 0.112], [0.6092, 0.1503], [0.556, 0.1722], [0.5, 0.1764], [0.447, 0.1633], [0.4019, 0.1351], [0.3688, 0.0954], [0.3502, 0.0487], [0.3472, 0.0], [0.3592, -0.0458], [0.384, -0.0842], [0.4185, -0.1121], [0.4586, -0.1273], [0.5, -0.1292], [0.5385, -0.1184], [0.5704, -0.0969], [0.593, -0.0676], [0.6049, -0.0341], [0.6056, -0.0], [0.5959, 0.0312], [0.5778, 0.0565], [0.5537, 0.0739], [0.5268, 0.0824], [0.5, 0.0819], [0.4761, 0.0734], [0.4574, 0.0587], [0.4452, 0.0398], [0.44, 0.0195], [0.4417, 0.0], [0.449, -0.0166], [0.4604, -0.0287], [0.474, -0.0357], [0.4878, -0.0375], [0.5, -0.0347], [0.5093, -0.0285], [0.7, 0], [1, 0]]}, {"name": "greek-wave-scroll", "points": [[0.0, 0.0], [0.18, 0.0], [0.74, 0.0], [0.7144, 0.0873], [0.6596, 0.1558], [0.5857, 0.1967], [0.505, 0.206], [0.43, 0.1847], [0.3713, 0.1384], [0.3363, 0.0761], [0.3281, 0.0083], [0.3457, -0.0543], [0.3839, -0.1028], [0.435, -0.1314], [0.49, -0.1377], [0.54, -0.1233], [0.5781, -0.0926], [0.5997, -0.0523], [0.6036, -0.01], [0.5916, 0.0273], [0.5679, 0.0546], [0.5382, 0.0687], [0.5085, 0.0696], [0.4838, 0.0595], [0.4677, 0.0422], [0.4615, 0.0226], [0.4642, 0.0052], [0.4731, -0.0066], [0.4845, -0.0113], [0.4845, -0.0113], [0.82, 0.0], [1.0, 0.0]]}, {"name": "spiral-loose", "points": [[0, 0], [0.22, 0], [0.78, 0.0], [0.7582, 0.0839], [0.7128, 0.1546], [0.6496, 0.2059], [0.576, 0.234], [0.5, 0.2375], [0.4292, 0.2178], [0.3704, 0.1784], [0.3285, 0.1246], [0.3065, 0.0629], [0.305, 0.0], [0.3226, -0.0576], [0.356, -0.1046], [0.4004, -0.1371], [0.4502, -0.1531], [0.5, -0.1525], [0.5445, -0.137], [0.5796, -0.1096], [0.6027, -0.0746], [0.6127, -0.0366], [0.61, -0.0], [0.5965, 0.0314], [0.5752, 0.0547], [0.5497, 0.0684], [0.5235, 0.0723], [0.5, 0.0675], [0.4818, 0.0561], [0.4703, 0.0409], [0.466, 0.0247], [0.78, 0], [1, 0]]}, {"name": "swash-s", "points": [[0, 0], [0, 0], [0.15, 0.0], [0.1792, 0.0392], [0.2083, 0.0776], [0.2375, 0.1148], [0.2667, 0.15], [0.2958, 0.1826], [0.325, 0.2121], [0.3542, 0.238], [0.3833, 0.2598], [0.4125, 0.2772], [0.4417, 0.2898], [0.4708, 0.2974], [0.5, 0.3], [0.5292, 0.2974], [0.5583, 0.2898], [0.5875, 0.2772], [0.6167, 0.2598], [0.6458, 0.238], [0.675, 0.2121], [0.7042, 0.1826], [0.7333, 0.15], [0.7625, 0.1148], [0.7917, 0.0776], [0.8208, 0.0392], [0.85, 0.0], [0.85, 0], [1, 0]]}, {"name": "swash-big-s", "points": [[0.0, 0.0], [0.0417, 0.0548], [0.0833, 0.1087], [0.125, 0.1607], [0.1667, 0.21], [0.2083, 0.2557], [0.25, 0.297], [0.2917, 0.3332], [0.3333, 0.3637], [0.375, 0.388], [0.4167, 0.4057], [0.4583, 0.4164], [0.5, 0.42], [0.5417, 0.4164], [0.5833, 0.4057], [0.625, 0.388], [0.6667, 0.3637], [0.7083, 0.3332], [0.75, 0.297], [0.7917, 0.2557], [0.8333, 0.21], [0.875, 0.1607], [0.9167, 0.1087], [0.9583, 0.0548], [1.0, 0.0]]}, {"name": "greek-wave-scroll-mirror", "points": [[0.0, 0.0], [0.18, 0.0], [0.74, 0.0], [0.7144, -0.0873], [0.6596, -0.1558], [0.5857, -0.1967], [0.505, -0.206], [0.43, -0.1847], [0.3713, -0.1384], [0.3363, -0.0761], [0.3281, -0.0083], [0.3457, 0.0543], [0.3839, 0.1028], [0.435, 0.1314], [0.49, 0.1377], [0.54, 0.1233], [0.5781, 0.0926], [0.5997, 0.0523], [0.6036, 0.01], [0.5916, -0.0273], [0.5679, -0.0546], [0.5382, -0.0687], [0.5085, -0.0696], [0.4838, -0.0595], [0.4677, -0.0422], [0.4615, -0.0226], [0.4642, -0.0052], [0.4731, 0.0066], [0.4845, 0.0113], [0.4845, 0.0113], [0.82, 0.0], [1.0, 0.0]]}, {"name": "swash-tight-s", "points": [[0.1, 0.0], [0.1333, 0.0235], [0.1667, 0.0466], [0.2, 0.0689], [0.2333, 0.09], [0.2667, 0.1096], [0.3, 0.1273], [0.3333, 0.1428], [0.3667, 0.1559], [0.4, 0.1663], [0.4333, 0.1739], [0.4667, 0.1785], [0.5, 0.18], [0.5333, 0.1785], [0.5667, 0.1739], [0.6, 0.1663], [0.6333, 0.1559], [0.6667, 0.1428], [0.7, 0.1273], [0.7333, 0.1096], [0.7667, 0.09], [0.8, 0.0689], [0.8333, 0.0466], [0.8667, 0.0235], [0.9, 0.0]]}]
+
+
+def _flourish_canonical_points(flourish_choice, rng):
+    if flourish_choice == FLOURISH_RANDOM:
+        return FLOURISHES[rng.randrange(len(FLOURISHES))]["points"]
+    for f in FLOURISHES:
+        if f["name"] == flourish_choice:
+            return f["points"]
+    return [[0.0, 0.0], [1.0, 0.0]]  # FLOURISH_NONE (or an unrecognized id): a straight connector
+
+
+def _oriented_flourish_points(points, want_positive_v):
+    """Auto-rotate a canonical flourish 180 degrees about its own chord
+    midpoint if its natural lean (net v, in the canonical entry->exit
+    frame) doesn't already match the side it's being inserted into -- so
+    a flourish always bulges away from the rest of the N-line bundle it's
+    next to (the "inside" line wants a net +v lean, since the bundle sits
+    to its right; "outside" wants -v, since the bundle sits to its left --
+    see apply_flourish_gap's callers) instead of crossing into it.
+    """
+    is_positive = sum(v for _, v in points) >= 0.0
+    if is_positive == want_positive_v:
+        return points
+    return [(1.0 - u, -v) for u, v in reversed(points)]
+
+
+def apply_flourish_gap(points, canonical_points):
+    """Replace the middle FLOURISH_GAP_FRACTION (by sample index, which for
+    these evenly-parametrized arcs tracks arc length closely enough for a
+    decorative gap) of `points` with `canonical_points`, scaled/rotated to
+    span the same entry->exit chord. Falls back to the untouched line if
+    it's too short to have a meaningful gap or the chord is degenerate.
+    """
+    n = len(points)
+    if n < 4:
+        return points
+    mid = (n - 1) / 2.0
+    half_gap = max(1.0, (n - 1) * FLOURISH_GAP_FRACTION / 2.0)
+    i_entry = max(0, int(math.floor(mid - half_gap)))
+    i_exit = min(n - 1, int(math.ceil(mid + half_gap)))
+    entry, exit_pt = points[i_entry], points[i_exit]
+    dx, dy = exit_pt[0] - entry[0], exit_pt[1] - entry[1]
+    chord = math.hypot(dx, dy)
+    if chord < 1e-9:
+        return points
+    cos_a, sin_a = dx / chord, dy / chord
+    flourish_pts = [
+        (
+            entry[0] + (u * chord) * cos_a - (v * chord) * sin_a,
+            entry[1] + (u * chord) * sin_a + (v * chord) * cos_a,
+        )
+        for u, v in canonical_points
+    ]
+    return points[:i_entry] + flourish_pts + points[i_exit + 1:]
+
+
+def truchet_face_paths(size, motif, n_samples=32, curve_amount=1.0):
     """Return the engrave centerline polylines for a tile's decorative face.
 
     "A" and "B" connect the four edge-midpoints (which sit at fixed points
     regardless of edge amplitude/harmonics/rotation, since g(0.5) == 0) with
-    corner-centered quarter-circle arcs, in the classic two-tile Truchet
-    style. "S" is a straight pass-through: two straight lines (vertical and
-    horizontal) through the same four midpoints, forming a "+" -- the
-    straight-tile counterpart to the curved motifs, for pipe/maze-style
+    corner-centered curves, in the classic two-tile Truchet style -- a full
+    quarter-circle arc at curve_amount=1 (the "Curve" slider's "High"), a
+    sharp 90-degree elbow at curve_amount=0 ("Low"), and a smoothly rounded
+    corner in between. "S" is a straight pass-through: two straight lines
+    (vertical and horizontal) through the same four midpoints, forming a
+    "+" -- the straight-tile counterpart to the curved motifs (unaffected
+    by curve_amount, since it has no corner to round), for pipe/maze-style
     layouts instead of flowing curves.
     """
     r = size / 2.0
     mid = size / 2.0
     if motif == "A":
         return [
-            _arc_points((0.0, 0.0), r, 0, 90, n_samples),
-            _arc_points((size, size), r, 180, 270, n_samples),
+            _corner_curve_points((0.0, 0.0), r, 0, 90, curve_amount, n_samples),
+            _corner_curve_points((size, size), r, 180, 270, curve_amount, n_samples),
         ]
     if motif == "B":
         return [
-            _arc_points((size, 0.0), r, 90, 180, n_samples),
-            _arc_points((0.0, size), r, 270, 360, n_samples),
+            _corner_curve_points((size, 0.0), r, 90, 180, curve_amount, n_samples),
+            _corner_curve_points((0.0, size), r, 270, 360, curve_amount, n_samples),
         ]
     return [
         [(mid, 0.0), (mid, size)],  # vertical pass-through
@@ -871,16 +986,27 @@ def generate_batch(params):
     engrave_width = params.get("engrave_width") or default_engrave_width(units)
     engrave_lines_n = int(params.get("engrave_lines") or 3)
     overshoot = max_wiggle_amplitude(harmonics)  # guaranteed >= the true boundary's max excursion anywhere
+    curve_amount = float(params.get("curve") if params.get("curve") is not None else 1.0)
+    flourish_choice = params.get("flourish") or FLOURISH_NONE
+    flourish_inside = bool(params.get("flourish_inside"))
+    flourish_outside = bool(params.get("flourish_outside"))
 
     face_rng = random.Random(params.get("face_seed"))
     tiles, tile_files = [], []
     for i in range(count):
         motif = face_rng.choice(MOTIFS)
-        engrave_lines = [
-            line
-            for arc in truchet_face_paths(size, motif)
-            for line in parallel_lines(extend_polyline_ends(arc, overshoot), engrave_width, engrave_lines_n)
-        ]
+        flourish_pts = _flourish_canonical_points(flourish_choice, face_rng)
+        engrave_lines = []
+        for arc in truchet_face_paths(size, motif, curve_amount=curve_amount):
+            lines = parallel_lines(extend_polyline_ends(arc, overshoot), engrave_width, engrave_lines_n)
+            if motif != "S" and (flourish_inside or flourish_outside):
+                if flourish_inside:
+                    lines[0] = apply_flourish_gap(lines[0], _oriented_flourish_points(flourish_pts, True))
+                if flourish_outside and len(lines) > 1:
+                    lines[-1] = apply_flourish_gap(lines[-1], _oriented_flourish_points(flourish_pts, False))
+                elif flourish_outside and len(lines) == 1 and not flourish_inside:
+                    lines[0] = apply_flourish_gap(lines[0], _oriented_flourish_points(flourish_pts, False))
+            engrave_lines.extend(lines)
         tiles.append({
             "parts": [{"cut_points": cut_outline, "engrave_lines": engrave_lines}],
             # Padded by `overshoot` on every side: the wiggly edge runs the
@@ -1008,6 +1134,10 @@ def main():
     parser.add_argument("--kerf-adjust", type=float, default=0.0, help="signed fine-tune offset (+ tighter, - looser)")
     parser.add_argument("--engrave-width", type=float, default=None, help="engrave channel width; default 0.5in / 12.7mm")
     parser.add_argument("--engrave-lines", type=int, default=None, help="number of parallel engrave lines spanning the channel width; default 3")
+    parser.add_argument("--curve", type=float, default=1.0, help="0=sharp 90-degree corners, 1=full quarter-circle arcs (default), anything between blends smoothly")
+    parser.add_argument("--flourish", type=str, default=FLOURISH_NONE, help=f"flourish id to insert into gapped inside/outside engrave lines, '{FLOURISH_RANDOM}' for a random one per tile, or '{FLOURISH_NONE}' (default) for a plain straight connector")
+    parser.add_argument("--flourish-inside", action="store_true", help="insert the flourish gap into the inside (smallest-radius) curve of each arc motif")
+    parser.add_argument("--flourish-outside", action="store_true", help="insert the flourish gap into the outside (largest-radius) curve of each arc motif")
     parser.add_argument("--units", choices=["in", "mm"], default="in")
     parser.add_argument("--samples-per-edge", type=int, default=120)
     parser.add_argument("--columns", type=int, default=None, help="pieces (tiles+frame+corner) per row when flowing the cutting layout; default: roughly square")

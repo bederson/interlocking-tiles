@@ -32,6 +32,13 @@ echo "Building Swift executable (release)..."
 BIN_PATH="$MACOS_DIR/.build/release/InterlockingTiles"
 
 echo "Assembling $APP_NAME..."
+# If a previous build of this app is still running, "open" on the rebuilt
+# bundle below just re-activates that existing process instead of
+# launching a fresh one -- so it would keep showing whatever was loaded
+# into its WKWebView from before this rebuild, even though the files on
+# disk are now current. Kill it first so the next launch is always a
+# genuinely fresh process.
+pkill -f "$APP_DIR/Contents/MacOS/InterlockingTiles" 2>/dev/null || true
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 

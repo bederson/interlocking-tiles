@@ -53,7 +53,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             fatalError("Missing app resources -- was this run from a properly built .app bundle?")
         }
         let indexURL = resourceURL.appendingPathComponent("web/index.html")
-        webView.loadFileURL(indexURL, allowingReadAccessTo: resourceURL)
+
+        // WKWebView's default data store persists its disk/memory cache of
+        // file:// resources on disk across separate app launches (keyed by
+        // this app's bundle identifier), so a rebuilt app can otherwise
+        // still serve stale HTML/CSS/JS from a previous run at the same
+        // on-disk path. Clear just those caches -- not localStorage, which
+        // intentionally persists control panel values across launches (see
+        // web/app.js's PERSISTED_FIELD_IDS) -- before every load. The
+        // bigger risk in practice is a *still-running* previous instance,
+        // which "open" just re-activates instead of launching a fresh
+        // process at all -- see build_app.sh's pkill step for that case.
+        let cacheTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+        ]
+        webView.configuration.websiteDataStore.removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) {
+            webView.loadFileURL(indexURL, allowingReadAccessTo: resourceURL)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
