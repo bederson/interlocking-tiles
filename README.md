@@ -12,6 +12,10 @@ from source instead.
 
 ![Interlocking Tile Design Console](docs/Screenshot.png)
 
+![Some cut tiles](docs/laser-cut-tiles-1.jpeg)
+
+![Some cut tiles](docs/laser-cut-tiles-2.jpeg)
+
 ## How it works
 
 Each edge of the square is a smooth curve built so that it is symmetric
