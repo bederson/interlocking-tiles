@@ -4,3 +4,4 @@ __pycache__/
 .DS_Store
 macos/.build/
 macos/build/
+macos/.cache/

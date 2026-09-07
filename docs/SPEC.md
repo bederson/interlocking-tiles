@@ -45,10 +45,23 @@
   (bulb wider than its neck, so a mated pair can't be pulled straight
   apart) on their short ends — one fixed convention so going around the
   border in one direction, every tab meets the next piece's socket.
-  Frame/corner depth defaults to tile size / 2.
-- Cutting layout is columns-first: you specify how many pieces (tiles,
-  frame, corner all together) flow per row, and the required material
-  size is computed and reported — not the other way around.
+  Frame/corner depth defaults to a fixed 0.5in / 12.7mm, regardless of
+  tile size.
+- Cutting layout is columns-first: `--columns` tiles establishes a fixed
+  material width, never exceeded by anything that flows afterward. Tiles,
+  then paired frame units, then paired corner units flow left to right
+  within that width in that order, wrapping to a new row whenever the next
+  piece wouldn't fit (frame pairs may wrap to their own row(s); corner
+  pairs simply continue from wherever the frame pairs left off). The
+  resulting height is computed and reported, not the other way around.
+  Frame and corner pieces (always an even count) are packed as tightly-
+  nested rotated pairs rather than individually — frame pairs stacked
+  flat-edge-to-flat-edge with a small gap, corner pairs rotated 180° so
+  one's L-shape fills the other's empty square — cutting material use by
+  roughly 10-15% versus independent placement.
+- Default output location: `~/Documents/Interlocking Tile Output/
+  <timestamp>/`, for both the web console and the native macOS app (whose
+  read-only app bundle has nowhere else sensible to write).
 - Combined `sheet_0001.svg`/`.dxf`/`.pdf` per sheet (tiles + frame + corner
   together); a from-scratch PDF writer (no dependency) is included purely
   as a combined reference/print document, not a cut source format.
@@ -58,7 +71,11 @@
 - Generator, web console, and P3 guide are built and smoke-tested (self-
   consistency checks, DXF validated with `ezdxf`, JS preview math verified
   identical to the Python export math, tab/socket alignment verified
-  numerically all the way around a full border loop).
+  numerically all the way around a full border loop, and the whole
+  generated sheet DXF checked pairwise for any cut-path crossing --
+  including a real margin-vs-wiggle-amplitude bug this check caught and
+  fixed, where a tile's actual wiggly boundary could bow past its nominal
+  footprint by more than the default margin allowed for).
 - Not yet done: an actual physical test cut. Per `p3_guide.md`, cut a
   small (2-4 tile) coupon first to validate the fit and calibrate
   `--kerf-adjust` before committing to a full batch.

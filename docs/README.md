@@ -43,7 +43,8 @@ needs 4 frame + 4 corner pieces; the grid shape defaults to a roughly-square
 layout inferred from `--count` (matching the web preview), or set it
 explicitly with `--grid-cols`/`--grid-rows`.
 
-Both piece types are `--frame-width` deep (default: tile size / 2) with one
+Both piece types are `--frame-width` deep (default: 0.5in / 12.7mm,
+regardless of tile size) with one
 long/short side an exact copy of the matching tile edge curve (guaranteed to
 fit, the same way two tiles fit each other) and the opposite side flat,
 completing the assembly's outer rectangle. The decorative engraving
@@ -70,16 +71,35 @@ All frame pieces are identical (as are all corner pieces) — like tiles,
 they're exported unrotated and rotated by hand during assembly (this also
 means you must assemble the border going around in one consistent
 direction, so each tab meets a socket rather than another tab). Files:
-`frame_0001.svg`/`.dxf`, `corner_0001.svg`/`.dxf` (individually, for
+`frame_edge_0001.svg`/`.dxf`, `frame_corner_0001.svg`/`.dxf` (individually, for
 inspection), and nested alongside the tiles in the combined `sheet_0001.*`
 files below rather than a separate sheet, for more efficient material use.
 
+On the cutting sheet specifically (not the individual inspection files,
+and not the assembled mosaic), frame and corner pieces are packed in
+tightly-nested pairs rather than each getting its own separate slot, since
+there are always an even number of each:
+
+- **Frame pairs**: two pieces stacked with one rotated 180°, so their flat
+  outer edges face each other with only a small ~1/8in (3mm) gap between
+  them — much closer than their wiggly tile-facing edges could safely get.
+- **Corner pairs**: two pieces rotated 180° relative to each other so one's
+  L-shape fills the square gap the other's L-shape leaves empty, nested
+  into very nearly the footprint of a single corner piece.
+
+Every pairing is verified (numerically, across a range of sizes/amplitudes)
+to have zero overlap between the two pieces. This packing typically cuts
+material use by roughly 10-15% versus placing every frame/corner piece
+independently.
+
 ## Output files
 
-Each run writes into a fresh timestamped subfolder (`output/<YYYYMMDD_HHMMSS>/`)
-so successive exports don't overwrite each other. Pass `--output-dir` (CLI)
-or type a path into the "Output folder" field (web console) to use a
-specific folder instead.
+Each run writes into a fresh timestamped subfolder under
+`~/Documents/Interlocking Tile Output/<YYYYMMDD_HHMMSS>/` so successive
+exports don't overwrite each other and both the web console and the native
+macOS app (whose app bundle is read-only) always land somewhere writable
+without any configuration. Pass `--output-dir` (CLI) to use a specific
+folder instead.
 
 ## Design console (web UI)
 
@@ -90,19 +110,20 @@ specific folder instead.
 This starts the server and opens the console in your browser automatically
 (default `http://127.0.0.1:8765/`; pass a port to use another, e.g.
 `./run.sh 8080`). Or run `python3 server.py` yourself and open the printed
-URL manually. Drag the sliders to preview the tile shape live — the preview
-grid always shows exactly the number of tiles set by "Tiles to export", each
-in a random rotation, demonstrating the edges mesh in every orientation,
-wrapped in the matching frame/corner border pieces shown in their correct
-assembly orientation. Set "Columns" under "Cutting layout" and the console
-live-updates the material size required to cut everything (tiles, frame,
-and corner pieces flowing that many per row) — you specify how the pieces
-pack, not a target material size to fit. Click **Export to disk** to write
-the real SVG + DXF + PDF files —
-the export always uses the same `generate_tiles.py` code the CLI uses, so
-what you preview is exactly what gets written. Sliders snap to clean
-increments (inches in quarter-inch steps, etc.) so you don't end up with odd
-decimal values baked into the design.
+URL manually. Click **Export design** at the top any time — it writes the
+real SVG + DXF + PDF files using the same `generate_tiles.py` code the CLI
+uses, so what you preview is exactly what gets written. Drag the sliders to
+preview the tile shape live — the preview grid always shows exactly the
+number of tiles set by "# Tiles", each in a random rotation, demonstrating
+the edges mesh in every orientation, wrapped in the matching frame/corner
+border pieces shown in their correct assembly orientation. Set "Columns"
+under "Cutting layout" and the console live-updates the material size
+required: that many tile-widths is the material's fixed width, and tiles,
+then frame pieces, then corner pieces flow left to right within it,
+wrapping to a new row whenever the next piece wouldn't fit — you specify
+how many tiles wide the material is, not a target size to fit everything
+into. Sliders snap to clean increments (inches in quarter-inch steps, etc.)
+so you don't end up with odd decimal values baked into the design.
 
 Control values are saved in your browser (`localStorage`) as you change
 them, so reopening the console later picks up where you left off. This is
@@ -126,8 +147,8 @@ material — tiles, frame pieces, and corner pieces all together (frame/corner
 nested into the leftover space beside and below the tile grid, rather than
 a separate sheet, for more efficient material use) — directly in the output
 folder, since those are the files you actually cut. Everything else —
-individual `tile_0001.svg`/`.dxf`, `frame_0001.svg`/`.dxf`,
-`corner_0001.svg`/`.dxf` files, for inspection/editing one piece at a time —
+individual `tile_0001.svg`/`.dxf`, `frame_edge_0001.svg`/`.dxf`,
+`frame_corner_0001.svg`/`.dxf` files, for inspection/editing one piece at a time —
 goes in a `pieces/` subfolder, out of the way.
 
 - **SVG** is for humans — open it in a browser, Illustrator, or Inkscape to
@@ -159,10 +180,12 @@ Key options:
   0.5in / 12.7mm).
 - `--engrave-lines` — number of parallel lines spanning that channel width
   (default 3).
-- `--columns` — how many pieces (tiles, frame, and corner pieces together)
-  flow per row when laying out the cutting sheet (default: roughly square).
-  The material size needed is *computed* from this and printed/returned,
-  rather than you specifying a target size to fit.
+- `--columns` — how many tiles wide the cutting sheet is (default: roughly
+  square). That establishes a fixed material width; tiles, then frame
+  pieces, then corner pieces flow left to right within it, wrapping to a
+  new row whenever the next piece wouldn't fit, so the material is never
+  wider than `--columns` tiles. The resulting height is *computed* and
+  printed/returned, rather than you specifying a target size to fit.
 - `--grid-cols`/`--grid-rows`/`--frame-width` — the final assembled mosaic
   shape (for frame/corner pieces) — a different concept from `--columns`,
   which only affects how pieces are packed for cutting. See "Frame and

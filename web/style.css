@@ -106,26 +106,17 @@ button:hover { border-color: var(--accent); }
 .sheet-status { font-size: 0.85rem; color: var(--muted); margin: 4px 0 0; }
 .sheet-status.error { color: var(--cut); font-weight: 600; }
 
-.export-row {
-  margin-top: 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
-}
-
 #exportBtn {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
   font-weight: 600;
+  font-size: 1rem;
+  width: 100%;
+  padding: 10px;
 }
 
-#exportStatus { color: var(--muted); font-size: 0.9rem; }
+#exportStatus { color: var(--muted); font-size: 0.85rem; }
 
 @media (prefers-color-scheme: dark) {
   :root {

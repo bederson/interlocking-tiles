@@ -10,7 +10,7 @@
 import AppKit
 import WebKit
 
-enum TileConsoleError: LocalizedError {
+enum InterlockingTilesError: LocalizedError {
     case message(String)
     var errorDescription: String? {
         switch self {
@@ -23,13 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var window: NSWindow!
     private var webView: WKWebView!
 
-    private static let timestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        return formatter
-    }()
-
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = Self.buildMainMenu()
+
         let contentController = WKUserContentController()
         contentController.addScriptMessageHandler(self, contentWorld: .page, name: "export")
 
@@ -64,6 +60,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         true
     }
 
+    /// A minimal app menu (no .xib/storyboard here) so Cmd+Q -- and the
+    /// dock/menu-bar Quit item -- work like any normal Mac app.
+    private static func buildMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+
+        let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Interlocking Tiles"
+        let quitItem = NSMenuItem(
+            title: "Quit \(appName)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+
+        return mainMenu
+    }
+
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage,
@@ -86,28 +104,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private func runExport(params: [String: Any], replyHandler: @escaping (Any?, String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                var effectiveParams = params
-                let hasOutputDir = (effectiveParams["output_dir"] as? String).map { !$0.isEmpty } ?? false
-                if !hasOutputDir {
-                    // The web console defaults to a folder next to the script; there's
-                    // no equivalent inside a read-only app bundle, so default to
-                    // ~/Documents instead of whatever the process's CWD happens to be.
-                    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-                        ?? FileManager.default.homeDirectoryForCurrentUser
-                    let stamp = Self.timestampFormatter.string(from: Date())
-                    effectiveParams["output_dir"] = docs.appendingPathComponent("TileConsole/output/\(stamp)").path
-                }
-
-                let inputData = try JSONSerialization.data(withJSONObject: effectiveParams)
+                // No output_dir override needed here: generate_tiles.py's own
+                // default_output_dir() already resolves to a fixed, writable
+                // ~/Documents location when the UI leaves it blank.
+                let inputData = try JSONSerialization.data(withJSONObject: params)
 
                 guard let resourceURL = Bundle.main.resourceURL else {
-                    throw TileConsoleError.message("missing app resources")
+                    throw InterlockingTilesError.message("missing app resources")
                 }
                 let bridgeURL = resourceURL.appendingPathComponent("bridge.py")
 
+                // Prefer the Python runtime bundled by Scripts/build_app.sh
+                // (so the app works out of the box on a Mac with no Python
+                // installed); fall back to the system python3 if the bundle
+                // was built without it (e.g. a quick dev build).
+                let bundledPython = resourceURL.appendingPathComponent("python/bin/python3")
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = ["python3", bridgeURL.path]
+                if FileManager.default.isExecutableFile(atPath: bundledPython.path) {
+                    process.executableURL = bundledPython
+                    process.arguments = [bridgeURL.path]
+                } else {
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                    process.arguments = ["python3", bridgeURL.path]
+                }
                 process.currentDirectoryURL = resourceURL
 
                 let stdinPipe = Pipe()
@@ -142,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
                 if stdoutData.isEmpty {
                     let errText = String(data: stderrData, encoding: .utf8) ?? "unknown error"
-                    throw TileConsoleError.message("export failed: \(errText)")
+                    throw InterlockingTilesError.message("export failed: \(errText)")
                 }
                 let result = try JSONSerialization.jsonObject(with: stdoutData)
                 DispatchQueue.main.async { replyHandler(result, nil) }

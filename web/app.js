@@ -78,8 +78,8 @@ function truchetFacePaths(size, motif, n = 24) {
 // the "x=size" end, socket always at the "start" end) makes every tab
 // meet the next piece's socket automatically going around the loop in one
 // consistent direction. Mirrors generate_tiles.py's CONNECTOR_* ratios.
-const CONNECTOR_NECK_RATIO = 0.15;
-const CONNECTOR_BULB_RADIUS_RATIO = 0.28;
+const CONNECTOR_NECK_RATIO = 0.1125;
+const CONNECTOR_BULB_RADIUS_RATIO = 0.21;
 const CONNECTOR_STEM_RATIO = 0.35;
 
 function connectorProtrusion(frameWidth) {
@@ -283,15 +283,19 @@ const UNIT_CONFIG = {
     size: { min: 1, max: 4, step: 0.25, default: 2, decimals: 2 },
     amplitude: { min: 0.05, max: 0.5, step: 0.05, default: 0.25, decimals: 2 },
     kerf: { min: -0.02, max: 0.02, step: 0.005, default: 0, decimals: 3 },
-    engraveWidth: { min: 0.1, max: 1.0, step: 0.05, default: 0.5, decimals: 2 },
+    engraveWidth: { min: 0.1, max: 0.5, step: 0.05, default: 0.5, decimals: 2 },
     sheetMargin: 0.25,
+    frameWidth: 0.5,
+    nestGap: 0.125,
   },
   mm: {
     size: { min: 25, max: 100, step: 5, default: 50, decimals: 0 },
     amplitude: { min: 1, max: 12, step: 1, default: 6, decimals: 0 },
     kerf: { min: -0.5, max: 0.5, step: 0.1, default: 0, decimals: 2 },
-    engraveWidth: { min: 2, max: 25, step: 1, default: 13, decimals: 0 },
+    engraveWidth: { min: 2, max: 12, step: 1, default: 12, decimals: 0 },
     sheetMargin: 6,
+    frameWidth: 12.7,
+    nestGap: 3.175,
   },
 };
 
@@ -341,51 +345,73 @@ function frameAndCornerCounts(gridCols, gridRows) {
   return [frameCount, cornerCount];
 }
 
-// Mirrors flow_layout() in generate_tiles.py: tiles, frame pieces, and
-// corner pieces all flow `columns` per row regardless of each piece's own
-// size, and the material size needed is computed from that -- rather than
-// fitting a given target sheet size.
-function requiredMaterialSize(size, frameWidth, count, gridCols, gridRows, columns, margin) {
+// Mirrors wrap_flow_layout() + paired_frame_item()/paired_corner_item() in
+// generate_tiles.py: `columns` tiles establishes a fixed material width,
+// and tiles, then paired frame units, then paired corner units flow left
+// to right within it in that order, wrapping to a new row whenever the
+// next piece wouldn't fit -- so that width is never exceeded regardless
+// of what's flowing. Frame/corner pieces are always even in count, so
+// every one of them pairs up (see generate_tiles.py's module comment on
+// cutting-sheet nesting).
+function requiredMaterialSize(size, frameWidth, count, gridCols, gridRows, columns, margin, overshoot) {
   const [frameCount, cornerCount] = frameAndCornerCounts(gridCols, gridRows);
   const r = connectorProtrusion(frameWidth);
-  const items = [];
-  for (let i = 0; i < count; i++) items.push({ width: size, height: size });
-  for (let i = 0; i < frameCount; i++) items.push({ width: size + r, height: frameWidth });
-  for (let i = 0; i < cornerCount; i++) items.push({ width: size + frameWidth + r, height: size + frameWidth });
+  const gap = UNIT_CONFIG[units].nestGap;
+  const framePairCount = frameCount / 2;
+  const cornerPairCount = cornerCount / 2;
 
-  let cursorY = margin;
-  let sheetW = margin;
-  for (let start = 0; start < items.length; start += columns) {
-    const row = items.slice(start, start + columns);
-    let cursorX = margin;
-    let rowHeight = 0;
-    for (const item of row) {
-      cursorX += item.width + margin;
-      rowHeight = Math.max(rowHeight, item.height);
-    }
-    sheetW = Math.max(sheetW, cursorX);
-    cursorY += rowHeight + margin;
+  const items = [];
+  for (let i = 0; i < count; i++) {
+    items.push({ width: size + 2 * overshoot, height: size + 2 * overshoot });
   }
-  return { sheetW, sheetH: cursorY, frameCount, cornerCount, totalItems: items.length };
+  for (let i = 0; i < framePairCount; i++) {
+    items.push({ width: size + 2 * r, height: 2 * frameWidth + gap + 2 * overshoot });
+  }
+  for (let i = 0; i < cornerPairCount; i++) {
+    items.push({ width: size + 2 * frameWidth, height: size + 2 * frameWidth + gap });
+  }
+
+  const tileWidth = size + 2 * overshoot;
+  const rowWidth = columns * tileWidth + (columns + 1) * margin;
+
+  let cursorX = margin;
+  let cursorY = margin;
+  let rowHeight = 0;
+  let rowHasItem = false;
+  for (const item of items) {
+    if (rowHasItem && cursorX + item.width + margin > rowWidth) {
+      cursorY += rowHeight + margin;
+      cursorX = margin;
+      rowHeight = 0;
+      rowHasItem = false;
+    }
+    cursorX += item.width + margin;
+    rowHeight = Math.max(rowHeight, item.height);
+    rowHasItem = true;
+  }
+  const sheetH = cursorY + rowHeight + margin;
+
+  return { sheetW: rowWidth, sheetH, frameCount, cornerCount, totalItems: count + frameCount + cornerCount };
 }
 
 function updateSheetStatus() {
   const size = parseFloat(el("size").value);
-  const frameWidth = size / 2;
+  const frameWidth = UNIT_CONFIG[units].frameWidth;
   const margin = UNIT_CONFIG[units].sheetMargin;
   const count = parseInt(el("count").value, 10);
   const columns = parseInt(el("columns").value, 10);
   const gridCols = Math.max(1, Math.ceil(Math.sqrt(count)));
   const gridRows = Math.max(1, Math.ceil(count / gridCols));
+  const overshoot = maxWiggleAmplitude(currentHarmonics());
 
   const { sheetW, sheetH, frameCount, cornerCount, totalItems } = requiredMaterialSize(
-    size, frameWidth, count, gridCols, gridRows, columns, margin
+    size, frameWidth, count, gridCols, gridRows, columns, margin, overshoot
   );
   const statusEl = el("sheetStatus");
   statusEl.classList.remove("error");
   statusEl.textContent =
     `${count} tiles + ${frameCount} frame + ${cornerCount} corner = ${totalItems} pieces, ` +
-    `${columns} per row → required material: ${sheetW.toFixed(2)} × ${sheetH.toFixed(2)} ${units}.`;
+    `${columns} tiles wide → required material: ${sheetW.toFixed(2)} × ${sheetH.toFixed(2)} ${units}.`;
 }
 
 function currentEdgeMode() {
@@ -422,12 +448,19 @@ function redraw() {
   const rotRng = mulberry32(previewSeed);
   const motifRng = mulberry32(previewSeed + 99991);
   const rotations = [0, 90, 180, 270];
-  const frameWidth = size / 2;
+  const frameWidth = UNIT_CONFIG[units].frameWidth;
 
+  // Pad by frameWidth (the frame/corner border depth) *plus* overshoot: the
+  // frame/corner engrave lines deliberately extend `overshoot` past their
+  // own flat outer edge (same harmless-overshoot pattern used everywhere
+  // else in this file), so the real content reaches frameWidth+overshoot
+  // beyond the tile grid, not just frameWidth -- without this, that
+  // overshoot silently clips against the SVG's own edge.
+  const pad = frameWidth + overshoot;
   const svg = el("previewSvg");
   svg.setAttribute(
     "viewBox",
-    `${-frameWidth} ${-frameWidth} ${size * gridCols + 2 * frameWidth} ${size * gridRows + 2 * frameWidth}`
+    `${-pad} ${-pad} ${size * gridCols + 2 * pad} ${size * gridRows + 2 * pad}`
   );
   svg.innerHTML = "";
 
@@ -540,15 +573,14 @@ async function doExport() {
     engrave_lines: parseInt(el("engraveLines").value, 10),
     count: parseInt(el("count").value, 10),
     face_seed: parseInt(el("faceSeed").value, 10),
-    output_dir: el("outputDir").value || null,
     columns: parseInt(el("columns").value, 10),
   };
   try {
     const data = await exportRequest(payload);
     if (!data.ok) throw new Error(data.error || "export failed");
     status.textContent =
-      `Wrote ${data.tile_count} tiles + ${data.frame_count} frame + ${data.corner_count} corner piece(s) ` +
-      `for a ${data.grid_cols}x${data.grid_rows} grid, ${data.columns} per row → required material ` +
+      `Wrote ${data.tile_count} tiles + ${data.frame_count} frame edge + ${data.corner_count} frame corner piece(s) ` +
+      `for a ${data.grid_cols}x${data.grid_rows} grid, ${data.columns} tiles wide → required material ` +
       `${data.sheet_width.toFixed(2)} × ${data.sheet_height.toFixed(2)} ${units}, to ${data.output_dir}/`;
   } catch (err) {
     status.textContent = `Error: ${err.message}`;
@@ -563,7 +595,7 @@ async function doExport() {
 const STORAGE_KEY = "tileConsole.controls";
 const PERSISTED_FIELD_IDS = [
   "size", "amplitude", "wiggles", "edgeSeed", "kerf", "engraveWidth", "engraveLines",
-  "count", "faceSeed", "columns", "outputDir",
+  "count", "faceSeed", "columns",
 ];
 
 function currentControlState() {

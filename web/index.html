@@ -7,10 +7,15 @@
 </head>
 <body>
 <h1>Interlocking Tile Design Console</h1>
-<p class="subtitle">Drag the sliders to preview the tile shape live. Export writes SVG + DXF files to disk for the XTool P3.</p>
+<p class="subtitle">Export writes SVG, DXF, and PDF files to ~Documents/Interlocking Tile Output.</p>
 
 <div class="layout">
   <div class="controls">
+
+    <div class="control">
+      <button type="button" id="exportBtn">Export design</button>
+      <span id="exportStatus"></span>
+    </div>
 
     <div class="control">
       <label for="size">Tile size <span class="value" id="sizeValue"></span></label>
@@ -26,8 +31,10 @@
 
     <fieldset>
       <legend>Edge shape</legend>
-      <label class="radio"><input type="radio" name="edgeMode" value="simple" checked> simple</label>
-      <label class="radio"><input type="radio" name="edgeMode" value="random"> randomized</label>
+      <div class="row">
+        <label class="radio"><input type="radio" name="edgeMode" value="simple" checked> simple</label>
+        <label class="radio"><input type="radio" name="edgeMode" value="random"> random</label>
+      </div>
 
       <div class="control sub" id="wigglesControl">
         <label for="wiggles">Wiggles <span class="value" id="wigglesValue"></span></label>
@@ -120,13 +127,6 @@
     <svg id="previewSvg" xmlns="http://www.w3.org/2000/svg"></svg>
     <p class="preview-caption" id="previewCaption"></p>
   </div>
-</div>
-
-<div class="export-row">
-  <label for="outputDir">Output folder</label>
-  <input type="text" id="outputDir" placeholder="output/<timestamp> (auto)">
-  <button type="button" id="exportBtn">Export to disk (SVG + DXF)</button>
-  <span id="exportStatus"></span>
 </div>
 
 <script src="app.js"></script>

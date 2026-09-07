@@ -70,7 +70,8 @@ XTool's own newer `.xs` format, so hand-generating it would risk producing
 a file that silently fails to open. DXF is the standard, well-specified way
 to get exact scale without manual fiddling.
 
-1. Import `output/sheet_0001.dxf` (or an individual `pieces/tile_NNNN.dxf`)
+1. Import `sheet_0001.dxf` (written under `~/Documents/Interlocking Tile
+   Output/<timestamp>/`, or an individual `pieces/tile_NNNN.dxf`)
    into XTool Creative Space (XCS). If you use the `.svg` instead, import at
    **original size** — not "scale to fit canvas."
 2. Either way, click the object after import and **verify the exact width

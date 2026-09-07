@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "TileConsole",
+    name: "InterlockingTiles",
     platforms: [.macOS(.v12)],
     targets: [
         .executableTarget(
-            name: "TileConsole",
-            path: "Sources/TileConsole"
+            name: "InterlockingTiles",
+            path: "Sources/InterlockingTiles"
         )
     ]
 )

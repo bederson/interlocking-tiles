@@ -42,6 +42,15 @@ def _normalize(v):
     return (v[0] / length, v[1] / length)
 
 
+def rotate_points(points, angle_deg, cx, cy):
+    angle = math.radians(angle_deg)
+    ca, sa = math.cos(angle), math.sin(angle)
+    return [
+        (cx + (x - cx) * ca - (y - cy) * sa, cy + (x - cx) * sa + (y - cy) * ca)
+        for x, y in points
+    ]
+
+
 def edge_points(p0, p1, harmonics, n_samples):
     """Sample one tile edge from corner p0 to corner p1 as a polyline.
 
@@ -180,8 +189,8 @@ CONNECTOR_SOCKET = "socket"
 # a mated tab/socket pair can't be pulled straight apart along the cap's own
 # axis -- only a plain semicircular bump could do that, since its widest
 # point is at the base. All three ratios are fractions of frame_width.
-CONNECTOR_NECK_RATIO = 0.15
-CONNECTOR_BULB_RADIUS_RATIO = 0.28
+CONNECTOR_NECK_RATIO = 0.1125
+CONNECTOR_BULB_RADIUS_RATIO = 0.21
 CONNECTOR_STEM_RATIO = 0.35
 
 
@@ -310,6 +319,82 @@ def frame_and_corner_counts(grid_cols, grid_rows):
 
 
 # ---------------------------------------------------------------------------
+# Cutting-sheet nesting: pairing frame/corner pieces so two share a much
+# smaller combined bounding box than placing them independently would need.
+# Every frame/corner piece is identical, so all pairs reuse the same base
+# outline/engrave-lines -- only the *packing* differs from the individually-
+# exported pieces/ files, physical assembly is unaffected either way (every
+# piece is already exported unrotated and hand-rotated into place).
+# ---------------------------------------------------------------------------
+
+def paired_frame_item(frame_outline, frame_lines, frame_width, size, gap, overshoot):
+    """Two frame pieces stacked as one packing unit: the first is rotated
+    180 degrees about its own bounding-box center so its flat outer edge
+    ends up facing up, then the second (unrotated) sits directly above it
+    with only `gap` between their flat edges -- verified numerically to
+    need no more clearance than that, since a flat edge (unlike a wiggly
+    one) has no wiggle to leave room for.
+    Returns one flow_layout item with two 'parts'.
+    """
+    pivot = (size / 2.0, -frame_width / 2.0)
+    bottom_outline = rotate_points(frame_outline, 180.0, *pivot)
+    bottom_lines = [rotate_points(line, 180.0, *pivot) for line in frame_lines]
+
+    dy = frame_width + gap
+    top_outline = [(x, y + dy) for x, y in frame_outline]
+    top_lines = [[(x, y + dy) for x, y in line] for line in frame_lines]
+
+    # Nominal (not exact-point) bounding box, matching the rest of this
+    # module's items and the JS mirror in requiredMaterialSize() -- both
+    # tabs end up on opposite sides after the rotation, so the pair is `r`
+    # wider on each side than a single piece. Height is padded by
+    # `overshoot` on the pair's outward-facing top/bottom (the two wiggly
+    # tile-facing edges, now on the outside of the stack) for the same
+    # reason tile items are -- see the comment there.
+    r = connector_protrusion(frame_width)
+    return {
+        "parts": [
+            {"cut_points": bottom_outline, "engrave_lines": bottom_lines},
+            {"cut_points": top_outline, "engrave_lines": top_lines},
+        ],
+        "width": size + 2 * r, "height": 2 * frame_width + gap + 2 * overshoot,
+        "min_x": -r, "min_y": -frame_width - overshoot,
+    }
+
+
+def paired_corner_item(corner_outline, corner_lines, size, frame_width, gap):
+    """Two corner pieces as one packing unit: the second is rotated 180
+    degrees about the tile corner point (size/2, size/2) so its L-shape
+    fills the square left empty by the first piece's own L-shape, then
+    nudged up by `gap` to clear a single near-touching point between their
+    connector caps right at (size, 0) -- verified numerically across
+    several size/frame_width/harmonics combinations that this small nudge
+    is enough (the two wiggly boundaries themselves stay far apart, since
+    they're separated by roughly the whole tile corner square).
+    Returns one flow_layout item with two 'parts'.
+    """
+    pivot = (size / 2.0, size / 2.0)
+    rotated_outline = rotate_points(corner_outline, 180.0, *pivot)
+    rotated_outline = [(x, y + gap) for x, y in rotated_outline]
+    rotated_lines = [
+        [(x, y + gap) for x, y in rotate_points(line, 180.0, *pivot)]
+        for line in corner_lines
+    ]
+
+    # Nominal bounding box (see paired_frame_item) -- assumes the tab
+    # protrusion r is smaller than frame_width, true for this module's
+    # connector ratios (stem+bulb well under 1x frame_width).
+    return {
+        "parts": [
+            {"cut_points": corner_outline, "engrave_lines": corner_lines},
+            {"cut_points": rotated_outline, "engrave_lines": rotated_lines},
+        ],
+        "width": size + 2 * frame_width, "height": size + 2 * frame_width + gap,
+        "min_x": -frame_width, "min_y": -frame_width,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Kerf compensation
 # ---------------------------------------------------------------------------
 
@@ -374,6 +459,19 @@ def parallel_lines(points, width, n):
 
 def default_engrave_width(units):
     return 12.7 if units == "mm" else 0.5  # 0.5 inch
+
+
+def default_frame_width(units):
+    return 12.7 if units == "mm" else 0.5  # 0.5 inch, regardless of tile size
+
+
+def default_nest_gap(units):
+    """Tight clearance for pairing frame/corner pieces on the cutting sheet
+    (see paired_frame_item/paired_corner_item) -- much smaller than the
+    regular sheet margin, since it only needs to clear a flat edge (frame
+    pairs) or a single near-touching connector point (corner pairs), not a
+    full wiggly boundary."""
+    return 3.175 if units == "mm" else 0.125  # 1/8 inch
 
 
 # ---------------------------------------------------------------------------
@@ -561,49 +659,65 @@ def write_sheet_pdf(path, sheet_w, sheet_h, units, cut_polys, engrave_polys):
 
 
 # ---------------------------------------------------------------------------
-# Sheet layout: flow every piece (tiles, frame pieces, corner pieces alike)
-# N=`columns` per row, top to bottom, and compute however much material
-# that needs -- rather than fitting a fixed target sheet size. One combined
-# sheet, since there's no fixed height to overflow.
+# Sheet layout: the tile grid's own `columns` count establishes a fixed
+# material width, and every piece (tiles, then paired frame units, then
+# paired corner units, in that order) flows left to right within that
+# width, wrapping to a new row whenever the next piece wouldn't fit --
+# never exceeding the width `columns` tiles need. One combined sheet,
+# since there's no fixed height to overflow.
 # ---------------------------------------------------------------------------
 
-def default_columns(item_count):
-    """A roughly-square default: about as many columns as rows."""
-    return max(1, math.ceil(math.sqrt(item_count)))
+def default_columns(count):
+    """A roughly-square default: about as many tile columns as rows."""
+    return max(1, math.ceil(math.sqrt(count)))
 
 
-def flow_layout(items, columns, margin):
-    """Lay out `items` (dicts with 'width'/'height'/'min_x'/'min_y'/
-    'cut_points'/'engrave_lines') `columns` per row, flowing top to bottom
-    regardless of each item's own size, and compute the material size that
-    requires.
+def wrap_flow_layout(items, row_width, margin):
+    """Lay out `items` (dicts with 'width'/'height'/'min_x'/'min_y'/'parts',
+    where 'parts' is a list of {'cut_points','engrave_lines'} -- more than
+    one part for a combined packing unit like paired_frame_item/
+    paired_corner_item, just one for a plain tile) left to right, wrapping
+    to a new row whenever the next item wouldn't fit within `row_width` --
+    a text-wrap/shelf packing, rather than a fixed items-per-row count, so
+    `row_width` (fixed -- established by the tile grid's own column count)
+    is never exceeded no matter what's flowing.
 
     Returns (placements, sheet_w, sheet_h): placements is a list of dicts
-    with 'cut_points'/'engrave_lines' already shifted to absolute
-    coordinates; sheet_w/sheet_h are the required material dimensions.
+    with a 'parts' list, each part's points already shifted to absolute
+    coordinates; sheet_w is exactly `row_width`, sheet_h is however tall
+    that ends up requiring.
     """
     def place(item, shift_x, shift_y):
         return {
-            "cut_points": [(x + shift_x, y + shift_y) for x, y in item["cut_points"]],
-            "engrave_lines": [[(x + shift_x, y + shift_y) for x, y in r] for r in item["engrave_lines"]],
+            "parts": [
+                {
+                    "cut_points": [(x + shift_x, y + shift_y) for x, y in part["cut_points"]],
+                    "engrave_lines": [
+                        [(x + shift_x, y + shift_y) for x, y in r] for r in part["engrave_lines"]
+                    ],
+                }
+                for part in item["parts"]
+            ],
         }
 
     placements = []
+    cursor_x = margin
     cursor_y = margin
-    sheet_w = margin
-    for row_start in range(0, len(items), columns):
-        row = items[row_start : row_start + columns]
-        cursor_x = margin
-        row_height = max((it["height"] for it in row), default=0.0)
-        for item in row:
-            placements.append(place(item, cursor_x - item["min_x"], cursor_y - item["min_y"]))
-            cursor_x += item["width"] + margin
-        sheet_w = max(sheet_w, cursor_x)
-        cursor_y += row_height + margin
+    row_height = 0.0
+    row_has_item = False
+    for item in items:
+        if row_has_item and cursor_x + item["width"] + margin > row_width:
+            cursor_y += row_height + margin
+            cursor_x = margin
+            row_height = 0.0
+            row_has_item = False
+        placements.append(place(item, cursor_x - item["min_x"], cursor_y - item["min_y"]))
+        cursor_x += item["width"] + margin
+        row_height = max(row_height, item["height"])
+        row_has_item = True
 
-    return placements, sheet_w, cursor_y
-
-    return sheets
+    sheet_h = cursor_y + row_height + margin
+    return placements, row_width, sheet_h
 
 
 def write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, sheet_h):
@@ -615,13 +729,14 @@ def write_combined_sheet(output_dir, sheet_number, placements, units, sheet_w, s
     dxf_entities = []
     cut_polys, engrave_polys = [], []
     for p in placements:
-        cut_path_ds.append(points_to_svg_path(p["cut_points"], closed=True))
-        engrave_path_ds.extend(points_to_svg_path(r, closed=False) for r in p["engrave_lines"])
-        dxf_entities += _dxf_polyline_lines(p["cut_points"], "CUT", 1, closed=True)
-        for r in p["engrave_lines"]:
-            dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=False)
-        cut_polys.append(p["cut_points"])
-        engrave_polys.extend(p["engrave_lines"])
+        for part in p["parts"]:
+            cut_path_ds.append(points_to_svg_path(part["cut_points"], closed=True))
+            engrave_path_ds.extend(points_to_svg_path(r, closed=False) for r in part["engrave_lines"])
+            dxf_entities += _dxf_polyline_lines(part["cut_points"], "CUT", 1, closed=True)
+            for r in part["engrave_lines"]:
+                dxf_entities += _dxf_polyline_lines(r, "ENGRAVE", 5, closed=False)
+            cut_polys.append(part["cut_points"])
+            engrave_polys.extend(part["engrave_lines"])
 
     svg_path = output_dir / f"sheet_{sheet_number:04d}.svg"
     svg_path.write_text(
@@ -695,8 +810,12 @@ def default_margin(units):
 
 
 def default_output_dir():
-    """A fresh timestamped subfolder so successive runs don't overwrite each other."""
-    return f"output/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    """A fresh timestamped subfolder under ~/Documents so successive runs
+    don't overwrite each other, and so the web console and native macOS
+    app (whose read-only app bundle can't write next to the script) both
+    land somewhere writable and easy to find without configuration."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(Path.home() / "Documents" / "Interlocking Tile Output" / stamp)
 
 
 def infer_grid_dims(count):
@@ -763,8 +882,16 @@ def generate_batch(params):
             for line in parallel_lines(extend_polyline_ends(arc, overshoot), engrave_width, engrave_lines_n)
         ]
         tiles.append({
-            "cut_points": cut_outline, "engrave_lines": engrave_lines, "motif": motif,
-            "width": size, "height": size, "min_x": 0.0, "min_y": 0.0,
+            "parts": [{"cut_points": cut_outline, "engrave_lines": engrave_lines}],
+            # Padded by `overshoot` on every side: the wiggly edge runs the
+            # whole perimeter and can bow outward past the nominal square
+            # anywhere except exactly at the corners, so the flow layout's
+            # margin needs to clear that, not just the idealized size x size
+            # footprint -- otherwise two rows can wiggle into each other
+            # when amplitude is comparable to the margin (verified this
+            # actually happens at this module's own CLI defaults).
+            "width": size + 2 * overshoot, "height": size + 2 * overshoot,
+            "min_x": -overshoot, "min_y": -overshoot,
         })
 
         svg_path = pieces_dir / f"tile_{i + 1:04d}.svg"
@@ -780,7 +907,7 @@ def generate_batch(params):
     default_cols, default_rows = infer_grid_dims(count)
     grid_cols = int(params.get("grid_cols") or default_cols)
     grid_rows = int(params.get("grid_rows") or default_rows)
-    frame_width = float(params.get("frame_width") or size / 2.0)
+    frame_width = float(params.get("frame_width") or default_frame_width(units))
     kerf_adjust = float(params.get("kerf_adjust", 0.0))
 
     frame_count, corner_count = frame_and_corner_counts(grid_cols, grid_rows)
@@ -800,14 +927,14 @@ def generate_batch(params):
 
     frame_files, corner_files = [], []
     for i in range(frame_count):
-        svg_path = pieces_dir / f"frame_{i + 1:04d}.svg"
-        dxf_path = pieces_dir / f"frame_{i + 1:04d}.dxf"
+        svg_path = pieces_dir / f"frame_edge_{i + 1:04d}.svg"
+        dxf_path = pieces_dir / f"frame_edge_{i + 1:04d}.dxf"
         write_piece_svg(svg_path, 0, -frame_width, size + r, frame_width, units, frame_outline, frame_lines)
         write_tile_dxf(dxf_path, units, frame_outline, frame_lines)
         frame_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
     for i in range(corner_count):
-        svg_path = pieces_dir / f"corner_{i + 1:04d}.svg"
-        dxf_path = pieces_dir / f"corner_{i + 1:04d}.dxf"
+        svg_path = pieces_dir / f"frame_corner_{i + 1:04d}.svg"
+        dxf_path = pieces_dir / f"frame_corner_{i + 1:04d}.dxf"
         write_piece_svg(
             svg_path, -frame_width, -frame_width, size + frame_width + r, size + frame_width,
             units, corner_outline, corner_lines,
@@ -815,30 +942,34 @@ def generate_batch(params):
         write_tile_dxf(dxf_path, units, corner_outline, corner_lines)
         corner_files.append({"svg": str(svg_path), "dxf": str(dxf_path)})
 
-    frame_items = [
-        {
-            "cut_points": frame_outline, "engrave_lines": frame_lines,
-            # width includes the tab's protrusion past x=size, so the flow
-            # layout reserves enough room and doesn't overlap the next item.
-            "width": size + r, "height": frame_width, "min_x": 0.0, "min_y": -frame_width,
-        }
-        for _ in range(frame_count)
+    # Frame and corner pieces are always needed in even counts (2 per
+    # non-corner border run, 4 corners total), so every one of them pairs
+    # up -- each pair packed into roughly the footprint of 1.something
+    # pieces instead of 2 separate ones (see paired_frame_item/
+    # paired_corner_item for the exact nesting).
+    gap = default_nest_gap(units)
+    frame_pair_items = [
+        paired_frame_item(frame_outline, frame_lines, frame_width, size, gap, overshoot)
+        for _ in range(frame_count // 2)
     ]
-    corner_items = [
-        {
-            "cut_points": corner_outline, "engrave_lines": corner_lines,
-            "width": size + frame_width + r, "height": size + frame_width,
-            "min_x": -frame_width, "min_y": -frame_width,
-        }
-        for _ in range(corner_count)
+    corner_pair_items = [
+        paired_corner_item(corner_outline, corner_lines, size, frame_width, gap)
+        for _ in range(corner_count // 2)
     ]
 
-    # Tiles, frame pieces, and corner pieces all flow together, `columns`
-    # per row, into one combined sheet -- the material size needed is
-    # computed from that layout, rather than fitting a given target size.
-    all_items = tiles + frame_items + corner_items
-    columns = int(params.get("columns") or default_columns(len(all_items)))
-    placements, sheet_w, sheet_h = flow_layout(all_items, columns, margin)
+    # The tile grid's own `columns` count establishes a fixed material
+    # width; tiles, then paired frame units, then paired corner units flow
+    # left to right in that order within it, wrapping to a new row
+    # whenever the next piece wouldn't fit -- so frame pairs may wrap to
+    # their own row(s), and corner pairs simply continue flowing from
+    # wherever the frame pairs left off, never exceeding that width.
+    columns = int(params.get("columns") or default_columns(count))
+    tile_width = size + 2 * overshoot
+    row_width = columns * tile_width + (columns + 1) * margin
+
+    all_items = tiles + frame_pair_items + corner_pair_items
+    placements, sheet_w, sheet_h = wrap_flow_layout(all_items, row_width, margin)
+
     svg_path, dxf_path, pdf_path = write_combined_sheet(output_dir, 1, placements, units, sheet_w, sheet_h)
     sheet_files = [{"svg": str(svg_path), "dxf": str(dxf_path), "pdf": str(pdf_path)}]
 
@@ -883,8 +1014,11 @@ def main():
     parser.add_argument("--sheet-margin", type=float, default=None, help="gap between pieces; default: 0.25in / 6mm")
     parser.add_argument("--grid-cols", type=int, default=None, help="tile grid width for frame/corner pieces; default: inferred square-ish from --count")
     parser.add_argument("--grid-rows", type=int, default=None, help="tile grid height for frame/corner pieces; default: inferred square-ish from --count")
-    parser.add_argument("--frame-width", type=float, default=None, help="frame/corner piece depth; default: size/2")
-    parser.add_argument("--output-dir", type=str, default=None, help="default: output/<timestamp>, a fresh folder per run")
+    parser.add_argument("--frame-width", type=float, default=None, help="frame/corner piece depth; default 0.5in / 12.7mm")
+    parser.add_argument(
+        "--output-dir", type=str, default=None,
+        help="default: ~/Documents/Interlocking Tile Output/<timestamp>, a fresh folder per run",
+    )
     args = parser.parse_args()
 
     try:
