@@ -10,6 +10,8 @@ Silicon only). It's unsigned/not notarized, so see the release notes for
 how to get macOS to open it. Or run the [web console](#design-console-web-ui)
 from source instead.
 
+![Interlocking Tile Design Console](docs/Screenshot.png)
+
 ## How it works
 
 Each edge of the square is a smooth curve built so that it is symmetric
@@ -17,7 +19,7 @@ under a 180-degree rotation about its own midpoint. Applying the same curve
 (rotated) to all four sides of the tile guarantees that when two identical
 tiles sit edge to edge, one tile's bump is exactly the other's notch — in
 any of the four rotations. The math is documented in comments in
-[generate_tiles.py](../generate_tiles.py).
+[generate_tiles.py](generate_tiles.py).
 
 Each tile also gets a decorative engraved motif connecting its edge
 midpoints, which line up across tile boundaries regardless of rotation, so
@@ -164,7 +166,7 @@ The same design console is also available as a standard double-clickable
 macOS app — one window, no local web server — built from this same `web/`
 and `generate_tiles.py` with no duplicated logic. [Download a prebuilt
 copy](https://github.com/bederson/interlocking-tiles/releases/latest), or
-see [macos/README.md](../macos/README.md) to build it yourself.
+see [macos/README.md](macos/README.md) to build it yourself.
 
 ## CLI usage
 
@@ -185,7 +187,7 @@ goes in a `pieces/` subfolder, out of the way.
   eyeball the design.
 - **DXF** is for the laser software — it carries explicit, unambiguous
   units, so it avoids the classic "SVG imported at the wrong scale" problem
-  (see [p3_guide.md](p3_guide.md)). Prefer importing the `.dxf`
+  (see [p3_guide.md](docs/p3_guide.md)). Prefer importing the `.dxf`
   file into XCS if you hit any scale issues with the SVG.
 - **PDF** is a single combined reference/print document showing the whole
   sheet layout at once — handy for a print-and-check-against-the-material
@@ -203,7 +205,7 @@ Key options:
   vary freely, it doesn't affect the physical fit.
 - `--amplitude` — how deep the bumps/notches are (inches).
 - `--kerf-adjust` — fine-tune the physical fit after a test cut (positive
-  tightens, negative loosens). See [p3_guide.md](p3_guide.md).
+  tightens, negative loosens). See [p3_guide.md](docs/p3_guide.md).
   Hidden in the web console (rarely needed once a material's kerf is
   dialed in) but fully functional via the CLI or a direct API call.
 - `--engrave-width` — width of the engraved decorative channel (default
@@ -232,7 +234,7 @@ Key options:
 
 ## Cutting on the XTool P3
 
-See [p3_guide.md](p3_guide.md) for material choice, starting
+See [p3_guide.md](docs/p3_guide.md) for material choice, starting
 settings, safety, and the recommended order of operations (always test-cut
 a small coupon before committing to a full batch).
 
