@@ -4,6 +4,12 @@ Small vector tiles designed to be manufactured by a laser cutter. Every tile use
 same edge pattern on all four sides, so any tile mates with any other tile
 in any rotation — Escher-esque, self-interlocking, no straight edges.
 
+**[Download the native macOS app](https://github.com/bederson/interlocking-tiles/releases/latest)**
+— a double-clickable `.app`, no Python or dependencies required (Apple
+Silicon only). It's unsigned/not notarized, so see the release notes for
+how to get macOS to open it. Or run the [web console](#design-console-web-ui)
+from source instead.
+
 ## How it works
 
 Each edge of the square is a smooth curve built so that it is symmetric
@@ -156,8 +162,9 @@ per-browser, not shared or synced anywhere.
 
 The same design console is also available as a standard double-clickable
 macOS app — one window, no local web server — built from this same `web/`
-and `generate_tiles.py` with no duplicated logic. See
-[macos/README.md](../macos/README.md) to build and run it.
+and `generate_tiles.py` with no duplicated logic. [Download a prebuilt
+copy](https://github.com/bederson/interlocking-tiles/releases/latest), or
+see [macos/README.md](../macos/README.md) to build it yourself.
 
 ## CLI usage
 
